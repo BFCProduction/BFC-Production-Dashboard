@@ -18,21 +18,26 @@ export async function requireStaff(req: Request): Promise<StaffUser | null> {
 
   const db = serviceClient()
 
+  // user_sessions links to the shared `users` table by user_id; pco_id + name
+  // live there (same tables Sunday Ops' pco-auth writes).
   const { data: session } = await db
     .from('user_sessions')
-    .select('pco_id, name, expires_at')
+    .select('expires_at, users:user_id ( pco_id, name )')
     .eq('token', token)
     .maybeSingle()
 
   if (!session) return null
   if (session.expires_at && new Date(session.expires_at) <= new Date()) return null
 
+  const u = (session as { users?: { pco_id: string; name: string | null } }).users
+  if (!u?.pco_id) return null
+
   const { data: staff } = await db
     .from('dashboard_staff')
     .select('pco_id')
-    .eq('pco_id', session.pco_id)
+    .eq('pco_id', u.pco_id)
     .maybeSingle()
 
   if (!staff) return null
-  return { pcoId: session.pco_id, name: session.name ?? '' }
+  return { pcoId: u.pco_id, name: u.name ?? '' }
 }

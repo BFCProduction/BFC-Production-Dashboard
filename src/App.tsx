@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useAuth } from './context/authState'
 import { LoginScreen, NotStaffScreen } from './components/LoginScreen'
 import { LinksRow } from './components/LinksRow'
@@ -5,10 +6,12 @@ import { WeekCalendar } from './components/WeekCalendar'
 import { TaskList } from './components/TaskList'
 import { Clipboard } from './components/Clipboard'
 import { HoursStrip } from './components/HoursStrip'
+import { DesktopTabs, MobileTabBar, type Tab } from './components/TabBar'
 import bfcLogo from './assets/BFC_Production_Logo_reverse.png'
 
 export default function App() {
   const { user, isStaff, isLoading, logout } = useAuth()
+  const [tab, setTab] = useState<Tab>('calendar')
 
   if (isLoading) {
     return (
@@ -39,15 +42,22 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-3 md:px-6 py-4 space-y-4">
+      <DesktopTabs active={tab} setActive={setTab} />
+
+      <main className="mx-auto max-w-5xl px-3 md:px-6 py-4 space-y-4 pb-28 md:pb-8">
         <LinksRow />
-        <WeekCalendar />
-        <HoursStrip />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <TaskList />
-          <Clipboard />
-        </div>
+
+        {tab === 'calendar' && (
+          <div className="space-y-4">
+            <WeekCalendar />
+            <HoursStrip />
+          </div>
+        )}
+        {tab === 'tasks' && <TaskList />}
+        {tab === 'clipboard' && <Clipboard />}
       </main>
+
+      <MobileTabBar active={tab} setActive={setTab} />
     </div>
   )
 }

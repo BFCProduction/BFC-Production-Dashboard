@@ -12,6 +12,14 @@ import bfcLogo from './assets/BFC_Production_Logo_reverse.png'
 export default function App() {
   const { user, isStaff, isLoading, logout } = useAuth()
   const [tab, setTab] = useState<Tab>('calendar')
+  // Mount a tab's content on first visit, then keep it mounted (hidden when
+  // inactive) so switching back is instant and doesn't refetch.
+  const [visited, setVisited] = useState<Set<Tab>>(new Set(['calendar']))
+
+  function goTo(t: Tab) {
+    setTab(t)
+    setVisited(prev => prev.has(t) ? prev : new Set(prev).add(t))
+  }
 
   if (isLoading) {
     return (
@@ -25,7 +33,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
-      {/* Dark logo header — matches Sunday Ops */}
       <header className="sticky top-0 z-20" style={{ background: '#1a1a1a' }}>
         <div className="mx-auto max-w-5xl flex items-center justify-between px-4 md:px-6 h-14">
           <div className="flex items-center gap-3">
@@ -42,22 +49,22 @@ export default function App() {
         </div>
       </header>
 
-      <DesktopTabs active={tab} setActive={setTab} />
+      <DesktopTabs active={tab} setActive={goTo} />
 
       <main className="mx-auto max-w-5xl px-3 md:px-6 py-4 space-y-4 pb-28 md:pb-8">
         <LinksRow />
 
-        {tab === 'calendar' && (
-          <div className="space-y-4">
+        {visited.has('calendar') && (
+          <div className={`${tab === 'calendar' ? 'block' : 'hidden'} space-y-4`}>
             <WeekCalendar />
             <HoursStrip />
           </div>
         )}
-        {tab === 'tasks' && <TaskList />}
-        {tab === 'clipboard' && <Clipboard />}
+        {visited.has('tasks') && <div className={tab === 'tasks' ? 'block' : 'hidden'}><TaskList /></div>}
+        {visited.has('clipboard') && <div className={tab === 'clipboard' ? 'block' : 'hidden'}><Clipboard /></div>}
       </main>
 
-      <MobileTabBar active={tab} setActive={setTab} />
+      <MobileTabBar active={tab} setActive={goTo} />
     </div>
   )
 }

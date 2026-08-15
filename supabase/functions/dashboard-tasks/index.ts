@@ -4,9 +4,9 @@
 // POST {}                            → { tasks: MondayTask[] }
 // POST { action:'updates', taskId }  → { updates: MondayUpdate[] }
 //
-// Board is the "Production Tasks" board (MONDAY_PRODUCTION_BOARD_ID, falling
-// back to MONDAY_BOARD_ID which currently points at the same board). Groups are
-// matched by title: "Inbox" and "Next Action".
+// Speed: the list query does NOT fetch per-item updates (that was the slow part);
+// updates load lazily on expand. Color: monday group colors + the standard
+// Priority palette are returned so the UI matches the board.
 // ─────────────────────────────────────────────────────────────────────────────
 import { corsHeaders, json } from '../_shared/cors.ts'
 import { requireStaff } from '../_shared/session.ts'
@@ -15,6 +15,12 @@ const GROUP_MATCHERS: { key: string; test: (title: string) => boolean }[] = [
   { key: 'inbox', test: (t) => t.toLowerCase().includes('inbox') },
   { key: 'next_actions', test: (t) => t.toLowerCase().includes('next action') },
 ]
+
+// monday's standard priority colors.
+const PRIORITY_COLORS: Record<string, string> = {
+  low: '#00c875', medium: '#fdab3d', high: '#e2445c', critical: '#bb3354',
+}
+const PRIORITY_SET = new Set(['low', 'medium', 'high', 'critical'])
 
 // deno-lint-ignore no-explicit-any
 async function monday(query: string): Promise<any> {
@@ -52,33 +58,45 @@ Deno.serve(async (req) => {
     return json({ updates })
   }
 
-  const data = await monday(`query { boards(ids:[${board}]) { items_page(limit: 200) { items { id name group { id title } updates { id } column_values { id text type ... on StatusValue { label } ... on PeopleValue { persons_and_teams { id kind } } } } } } }`)
+  const data = await monday(`query { boards(ids:[${board}]) { groups { id title color } items_page(limit: 200) { items { id name group { id } column_values { id text type ... on StatusValue { label } } } } } }`)
 
-  const items = data?.data?.boards?.[0]?.items_page?.items ?? []
+  const b = data?.data?.boards?.[0]
+  // deno-lint-ignore no-explicit-any
+  const groupMap: Record<string, { title: string; color: string }> = {}
+  // deno-lint-ignore no-explicit-any
+  for (const g of (b?.groups ?? []) as any[]) groupMap[g.id] = { title: g.title, color: g.color }
+
+  const items = b?.items_page?.items ?? []
   const tasks = []
   for (const it of items) {
-    const groupTitle: string = it.group?.title ?? ''
-    const match = GROUP_MATCHERS.find((g) => g.test(groupTitle))
+    const g = groupMap[it.group?.id]
+    if (!g) continue
+    const match = GROUP_MATCHERS.find((m) => m.test(g.title))
     if (!match) continue
+
     // deno-lint-ignore no-explicit-any
     const cols: any[] = it.column_values ?? []
-    const statusCols = cols.filter((c) => c.type === 'status')
-    const statusCol = statusCols.find((c) => c.label || c.text) ?? statusCols[0]
+    // Priority = the status column whose label is Low/Medium/High/Critical.
+    const priorityCol = cols.find((c) => c.type === 'status' && c.label && PRIORITY_SET.has(String(c.label).toLowerCase()))
+    const priority = priorityCol?.label ?? null
+    const priorityColor = priority ? (PRIORITY_COLORS[String(priority).toLowerCase()] ?? null) : null
     const dueCol = cols.find((c) => c.type === 'date')
     const personCol = cols.find((c) => c.type === 'people')
     const assignees = (personCol?.text ? String(personCol.text).split(',') : [])
-      .map((n: string) => n.trim())
-      .filter(Boolean)
+      .map((n: string) => n.trim()).filter(Boolean)
       .map((name: string) => ({ id: name, name, avatarUrl: null }))
+
     tasks.push({
       id: it.id,
       name: it.name,
       group: match.key,
-      status: statusCol?.label ?? statusCol?.text ?? null,
-      statusColor: null,
+      groupTitle: g.title,
+      groupColor: g.color,
+      status: priority,
+      statusColor: priorityColor,
       dueDate: dueCol?.text || null,
       assignees,
-      updatesCount: (it.updates ?? []).length,
+      updatesCount: 0,
       updates: [],
       url: `https://monday.com/boards/${board}/pulses/${it.id}`,
     })

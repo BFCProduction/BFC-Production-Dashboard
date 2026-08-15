@@ -36,8 +36,10 @@ export interface MondayTask {
   id: string
   name: string
   group: 'inbox' | 'next_actions' | string
-  status: string | null
-  statusColor: string | null
+  groupTitle?: string
+  groupColor?: string | null   // monday group color (hex)
+  status: string | null        // priority label (Low/Medium/High/…)
+  statusColor: string | null   // monday priority color (hex)
   dueDate: string | null // YYYY-MM-DD
   assignees: MondayAssignee[]
   updatesCount: number

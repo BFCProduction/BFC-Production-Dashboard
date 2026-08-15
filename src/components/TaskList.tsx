@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, ExternalLink, MessageSquare } from 'lucide-react'
+import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 import { useAuth } from '../context/authState'
 import { loadTasks, loadTaskUpdates } from '../lib/dashboardData'
 import type { MondayTask, MondayUpdate } from '../types'
@@ -23,7 +23,7 @@ function TaskCard({ task }: { task: MondayTask }) {
   function toggle() {
     const next = !open
     setOpen(next)
-    if (next && updates === null && task.updatesCount > 0) {
+    if (next && updates === null) {
       setLoadingUpdates(true)
       loadTaskUpdates(task.id, sessionToken)
         .then(setUpdates).catch(() => setUpdates([])).finally(() => setLoadingUpdates(false))
@@ -31,19 +31,24 @@ function TaskCard({ task }: { task: MondayTask }) {
   }
 
   return (
-    <div className="rounded-xl bg-white border border-gray-200 shadow-sm">
+    <div
+      className="rounded-xl bg-white border border-gray-200 shadow-sm overflow-hidden"
+      style={{ borderLeft: `4px solid ${task.groupColor ?? '#cbd5e1'}` }}
+    >
       <button onClick={toggle} className="w-full flex items-center gap-2 p-3 text-left">
         {open ? <ChevronDown size={16} className="text-gray-400 shrink-0" /> : <ChevronRight size={16} className="text-gray-400 shrink-0" />}
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-gray-900">{task.name}</div>
-          <div className="mt-1 flex items-center gap-2 text-[11px] text-gray-500">
+          <div className="mt-1.5 flex items-center gap-2 flex-wrap">
             {task.status && (
-              <span className="rounded px-1.5 py-0.5 font-medium bg-gray-100 text-gray-700">{task.status}</span>
+              <span
+                className="rounded px-2 py-0.5 text-[11px] font-semibold text-white"
+                style={{ backgroundColor: task.statusColor ?? '#9ca3af' }}
+              >
+                {task.status}
+              </span>
             )}
-            {task.dueDate && <span>Due {task.dueDate}</span>}
-            {task.updatesCount > 0 && (
-              <span className="flex items-center gap-0.5"><MessageSquare size={11} />{task.updatesCount}</span>
-            )}
+            {task.dueDate && <span className="text-[11px] text-gray-500">Due {task.dueDate}</span>}
           </div>
         </div>
         <div className="flex -space-x-1.5 shrink-0">
@@ -52,9 +57,9 @@ function TaskCard({ task }: { task: MondayTask }) {
       </button>
 
       {open && (
-        <div className="border-t border-gray-100 px-3 py-2 space-y-2 bg-gray-50/50">
-          {task.updatesCount === 0 && <p className="text-[11px] text-gray-400">No updates.</p>}
+        <div className="border-t border-gray-100 px-3 py-2 space-y-2 bg-gray-50/60">
           {loadingUpdates && <p className="text-[11px] text-gray-400">Loading updates…</p>}
+          {updates && updates.length === 0 && !loadingUpdates && <p className="text-[11px] text-gray-400">No updates.</p>}
           {updates?.map(u => (
             <div key={u.id} className="flex gap-2">
               <Avatar url={u.authorAvatarUrl} name={u.authorName} size={20} />
@@ -102,9 +107,14 @@ export function TaskList() {
       {error && <p className="text-sm text-gray-400">Tasks aren't connected yet ({error}).</p>}
       {!loading && !error && groups.map(g => {
         const groupTasks = tasks.filter(t => t.group === g.key)
+        const color = groupTasks[0]?.groupColor ?? '#cbd5e1'
         return (
           <div key={g.key} className="mb-4 last:mb-0">
-            <h3 className="text-[11px] uppercase tracking-wide text-gray-400 font-semibold mb-2">{g.label}</h3>
+            <h3 className="flex items-center gap-2 text-[11px] uppercase tracking-wide font-bold mb-2" style={{ color }}>
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+              {g.label}
+              <span className="text-gray-300 font-medium normal-case">{groupTasks.length}</span>
+            </h3>
             <div className="flex flex-col gap-2">
               {groupTasks.length === 0 && <p className="text-[11px] text-gray-400">Nothing here.</p>}
               {groupTasks.map(t => <TaskCard key={t.id} task={t} />)}

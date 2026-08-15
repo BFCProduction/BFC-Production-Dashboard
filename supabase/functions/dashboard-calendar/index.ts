@@ -149,10 +149,19 @@ async function fetchMondayDueTasks(start: Date, end: Date): Promise<CalEvent[]> 
   const out: CalEvent[] = []
   for (const it of items) {
     const due = it.column_values.find((c: { type: string }) => c.type === 'date')?.text
-    if (!due) continue
-    const d = new Date(due + 'T09:00:00')
+    const d = parseDue(due)
+    if (!d) continue
     if (d < start || d > end) continue
     out.push({ id: `monday-${it.id}`, layer: 'monday', title: it.name, start: d.toISOString(), end: null, allDay: true, sourceUrl: `https://monday.com/boards/${board}/pulses/${it.id}` })
   }
   return out
+}
+
+// Handles "2026-08-13" and "2026-08-13 16:00" (and T-separated); undated → null.
+function parseDue(due: string | null | undefined): Date | null {
+  if (!due) return null
+  const m = due.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/)
+  if (!m) return null
+  const [, y, mo, d, h, mi] = m
+  return new Date(+y, +mo - 1, +d, h ? +h : 9, mi ? +mi : 0)
 }

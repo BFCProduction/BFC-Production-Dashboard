@@ -32,18 +32,22 @@ export interface MondayUpdate {
   body: string           // plain text
 }
 
+export interface StatusCell {
+  label: string
+  color: string // hex, from monday column settings
+}
+
 export interface MondayTask {
   id: string
   name: string
   group: 'inbox' | 'next_actions' | string
   groupTitle?: string
-  groupColor?: string | null   // monday group color (hex)
-  status: string | null        // priority label (Low/Medium/High/…)
-  statusColor: string | null   // monday priority color (hex)
-  dueDate: string | null // YYYY-MM-DD
+  groupColor?: string | null      // monday group color (hex)
+  priority: StatusCell | null     // Priority column (status_18)
+  statusField: StatusCell | null  // Status column (status)
+  category: StatusCell | null     // Category column (status_1)
+  dueDate: string | null          // e.g. "2026-08-13" or "2026-08-13 16:00"
   assignees: MondayAssignee[]
-  updatesCount: number
-  updates: MondayUpdate[]     // loaded lazily when a task is expanded
   url: string
 }
 

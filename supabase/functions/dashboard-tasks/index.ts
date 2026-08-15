@@ -1,12 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // dashboard-tasks — monday.com Production Tasks (Inbox + Next Action).
 //
-// POST {}                            → { tasks: MondayTask[] }
-// POST { action:'updates', taskId }  → { updates: MondayUpdate[] }
-//
-// Speed: the list query does NOT fetch per-item updates (that was the slow part);
-// updates load lazily on expand. Color: monday group colors + the standard
-// Priority palette are returned so the UI matches the board.
+// Returns tasks shaped to mirror the monday board columns:
+//   Item · Person · Priority · Status · Category · Due Date
+// Status/Priority/Category colors come from each column's real monday settings.
+// Updates load lazily via { action:'updates', taskId }.
 // ─────────────────────────────────────────────────────────────────────────────
 import { corsHeaders, json } from '../_shared/cors.ts'
 import { requireStaff } from '../_shared/session.ts'
@@ -16,25 +14,43 @@ const GROUP_MATCHERS: { key: string; test: (title: string) => boolean }[] = [
   { key: 'next_actions', test: (t) => t.toLowerCase().includes('next action') },
 ]
 
-// monday's standard priority colors.
-const PRIORITY_COLORS: Record<string, string> = {
-  low: '#00c875', medium: '#fdab3d', high: '#e2445c', critical: '#bb3354',
-}
-const PRIORITY_SET = new Set(['low', 'medium', 'high', 'critical'])
+const PRIORITY_COL = 'status_18'
+const STATUS_COL = 'status'
+const CATEGORY_COL = 'status_1'
+const PERSON_COL = 'person'
+const DATE_COL = 'date'
 
 // deno-lint-ignore no-explicit-any
-async function monday(query: string): Promise<any> {
+async function monday(query: string, variables: Record<string, unknown> = {}): Promise<any> {
   const token = Deno.env.get('MONDAY_API_TOKEN')!
   const res = await fetch('https://api.monday.com/v2', {
     method: 'POST',
     headers: { Authorization: token, 'Content-Type': 'application/json', 'API-Version': '2024-10' },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, variables }),
   })
   return res.json()
 }
 
 function boardId(): string {
   return Deno.env.get('MONDAY_PRODUCTION_BOARD_ID') ?? Deno.env.get('MONDAY_BOARD_ID')!
+}
+
+// index → hex color, parsed from a status column's settings_str.
+function colorMap(settings_str: string): Record<string, string> {
+  try {
+    const s = JSON.parse(settings_str)
+    const out: Record<string, string> = {}
+    for (const k in (s.labels_colors ?? {})) out[k] = s.labels_colors[k].color
+    return out
+  } catch { return {} }
+}
+
+interface Cell { label: string; color: string }
+// deno-lint-ignore no-explicit-any
+function statusCell(cols: any[], id: string, map: Record<string, string>): Cell | null {
+  const cv = cols.find((c) => c.id === id)
+  if (!cv || cv.index === null || cv.index === undefined || !cv.label) return null
+  return { label: cv.label, color: map[String(cv.index)] ?? '#c4c4c4' }
 }
 
 Deno.serve(async (req) => {
@@ -58,13 +74,29 @@ Deno.serve(async (req) => {
     return json({ updates })
   }
 
-  const data = await monday(`query { boards(ids:[${board}]) { groups { id title color } items_page(limit: 200) { items { id name group { id } column_values { id text type ... on StatusValue { label } } } } } }`)
+  const data = await monday(`query {
+    boards(ids:[${board}]) {
+      groups { id title color }
+      columns(ids: ["${PRIORITY_COL}","${STATUS_COL}","${CATEGORY_COL}"]) { id settings_str }
+      items_page(limit: 200) {
+        items {
+          id name group { id }
+          column_values(ids: ["${PERSON_COL}","${PRIORITY_COL}","${STATUS_COL}","${CATEGORY_COL}","${DATE_COL}"]) {
+            id text ... on StatusValue { index label } ... on DateValue { date }
+          }
+        }
+      }
+    }
+  }`)
 
   const b = data?.data?.boards?.[0]
-  // deno-lint-ignore no-explicit-any
   const groupMap: Record<string, { title: string; color: string }> = {}
   // deno-lint-ignore no-explicit-any
   for (const g of (b?.groups ?? []) as any[]) groupMap[g.id] = { title: g.title, color: g.color }
+
+  const maps: Record<string, Record<string, string>> = {}
+  // deno-lint-ignore no-explicit-any
+  for (const c of (b?.columns ?? []) as any[]) maps[c.id] = colorMap(c.settings_str)
 
   const items = b?.items_page?.items ?? []
   const tasks = []
@@ -76,15 +108,11 @@ Deno.serve(async (req) => {
 
     // deno-lint-ignore no-explicit-any
     const cols: any[] = it.column_values ?? []
-    // Priority = the status column whose label is Low/Medium/High/Critical.
-    const priorityCol = cols.find((c) => c.type === 'status' && c.label && PRIORITY_SET.has(String(c.label).toLowerCase()))
-    const priority = priorityCol?.label ?? null
-    const priorityColor = priority ? (PRIORITY_COLORS[String(priority).toLowerCase()] ?? null) : null
-    const dueCol = cols.find((c) => c.type === 'date')
-    const personCol = cols.find((c) => c.type === 'people')
-    const assignees = (personCol?.text ? String(personCol.text).split(',') : [])
+    const personText = cols.find((c) => c.id === PERSON_COL)?.text ?? ''
+    const assignees = (personText ? String(personText).split(',') : [])
       .map((n: string) => n.trim()).filter(Boolean)
       .map((name: string) => ({ id: name, name, avatarUrl: null }))
+    const dueText = cols.find((c) => c.id === DATE_COL)?.text || null
 
     tasks.push({
       id: it.id,
@@ -92,12 +120,11 @@ Deno.serve(async (req) => {
       group: match.key,
       groupTitle: g.title,
       groupColor: g.color,
-      status: priority,
-      statusColor: priorityColor,
-      dueDate: dueCol?.text || null,
+      priority: statusCell(cols, PRIORITY_COL, maps[PRIORITY_COL] ?? {}),
+      statusField: statusCell(cols, STATUS_COL, maps[STATUS_COL] ?? {}),
+      category: statusCell(cols, CATEGORY_COL, maps[CATEGORY_COL] ?? {}),
+      dueDate: dueText,
       assignees,
-      updatesCount: 0,
-      updates: [],
       url: `https://monday.com/boards/${board}/pulses/${it.id}`,
     })
   }

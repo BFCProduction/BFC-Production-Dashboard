@@ -80,6 +80,34 @@ function TaskCard({ task }: { task: MondayTask }) {
   )
 }
 
+// Urgency of priority for the tiebreak (most urgent first).
+const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 }
+function priorityRank(status: string | null): number {
+  return status ? (PRIORITY_RANK[status.toLowerCase()] ?? 4) : 5
+}
+
+// Sort: past-dated first, then most-recent date first, no-date last; then priority.
+function sortTasks(list: MondayTask[]): MondayTask[] {
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+  const ms = (t: MondayTask) => {
+    if (!t.dueDate) return null
+    const v = Date.parse(t.dueDate)
+    return Number.isNaN(v) ? null : v
+  }
+  const bucket = (t: MondayTask) => {
+    const m = ms(t)
+    if (m === null) return 2        // no date → bottom
+    return m < todayStart.getTime() ? 0 : 1  // past → top, upcoming → middle
+  }
+  return [...list].sort((a, b) => {
+    const ba = bucket(a), bb = bucket(b)
+    if (ba !== bb) return ba - bb
+    const ma = ms(a), mb = ms(b)
+    if (ma !== null && mb !== null && ma !== mb) return mb - ma // most-recent date first
+    return priorityRank(a.status) - priorityRank(b.status)      // then priority
+  })
+}
+
 export function TaskList() {
   const { sessionToken } = useAuth()
   const [tasks, setTasks] = useState<MondayTask[]>([])
@@ -106,7 +134,7 @@ export function TaskList() {
       {loading && <p className="text-sm text-gray-400">Loading tasks…</p>}
       {error && <p className="text-sm text-gray-400">Tasks aren't connected yet ({error}).</p>}
       {!loading && !error && groups.map(g => {
-        const groupTasks = tasks.filter(t => t.group === g.key)
+        const groupTasks = sortTasks(tasks.filter(t => t.group === g.key))
         const color = groupTasks[0]?.groupColor ?? '#cbd5e1'
         return (
           <div key={g.key} className="mb-4 last:mb-0">

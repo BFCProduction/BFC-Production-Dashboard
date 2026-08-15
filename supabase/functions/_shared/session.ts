@@ -6,10 +6,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 export interface StaffUser { pcoId: string; name: string }
 
 export function serviceClient() {
-  return createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_KEY')!,
-  )
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SERVICE_KEY')!
+  return createClient(Deno.env.get('SUPABASE_URL')!, key)
 }
 
 export async function requireStaff(req: Request): Promise<StaffUser | null> {
@@ -18,18 +16,23 @@ export async function requireStaff(req: Request): Promise<StaffUser | null> {
 
   const db = serviceClient()
 
-  // user_sessions links to the shared `users` table by user_id; pco_id + name
-  // live there (same tables Sunday Ops' pco-auth writes).
+  // Two-step (no reliance on PostgREST FK inference): session → user_id, then
+  // users → pco_id/name. Same shared tables Sunday Ops' pco-auth writes.
   const { data: session } = await db
     .from('user_sessions')
-    .select('expires_at, users:user_id ( pco_id, name )')
+    .select('user_id, expires_at')
     .eq('token', token)
     .maybeSingle()
 
   if (!session) return null
   if (session.expires_at && new Date(session.expires_at) <= new Date()) return null
 
-  const u = (session as { users?: { pco_id: string; name: string | null } }).users
+  const { data: u } = await db
+    .from('users')
+    .select('pco_id, name')
+    .eq('id', session.user_id)
+    .maybeSingle()
+
   if (!u?.pco_id) return null
 
   const { data: staff } = await db

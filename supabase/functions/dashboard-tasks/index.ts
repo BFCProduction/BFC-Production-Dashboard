@@ -83,6 +83,7 @@ Deno.serve(async (req) => {
           id name group { id }
           column_values(ids: ["${PERSON_COL}","${PRIORITY_COL}","${STATUS_COL}","${CATEGORY_COL}","${DATE_COL}"]) {
             id text ... on StatusValue { index label } ... on DateValue { date }
+            ... on PeopleValue { persons_and_teams { id kind } }
           }
         }
       }
@@ -99,6 +100,23 @@ Deno.serve(async (req) => {
   for (const c of (b?.columns ?? []) as any[]) maps[c.id] = colorMap(c.settings_str)
 
   const items = b?.items_page?.items ?? []
+
+  // Collect every assigned person id across items, then resolve names+photos in
+  // one users() call and build an id → {name, avatar} map.
+  const personIds = new Set<string>()
+  for (const it of items) {
+    // deno-lint-ignore no-explicit-any
+    const pc = (it.column_values ?? []).find((c: any) => c.id === PERSON_COL)
+    // deno-lint-ignore no-explicit-any
+    for (const p of (pc?.persons_and_teams ?? []) as any[]) if (p.kind === 'person') personIds.add(String(p.id))
+  }
+  const people: Record<string, { name: string; avatarUrl: string | null }> = {}
+  if (personIds.size > 0) {
+    const ud = await monday(`query { users(ids: [${[...personIds].join(',')}]) { id name photo_thumb_small } }`)
+    // deno-lint-ignore no-explicit-any
+    for (const u of (ud?.data?.users ?? []) as any[]) people[String(u.id)] = { name: u.name, avatarUrl: u.photo_thumb_small ?? null }
+  }
+
   const tasks = []
   for (const it of items) {
     const g = groupMap[it.group?.id]
@@ -108,10 +126,14 @@ Deno.serve(async (req) => {
 
     // deno-lint-ignore no-explicit-any
     const cols: any[] = it.column_values ?? []
-    const personText = cols.find((c) => c.id === PERSON_COL)?.text ?? ''
-    const assignees = (personText ? String(personText).split(',') : [])
-      .map((n: string) => n.trim()).filter(Boolean)
-      .map((name: string) => ({ id: name, name, avatarUrl: null }))
+    const personCol = cols.find((c) => c.id === PERSON_COL)
+    // deno-lint-ignore no-explicit-any
+    const assignees = ((personCol?.persons_and_teams ?? []) as any[])
+      .filter((p) => p.kind === 'person')
+      .map((p) => {
+        const info = people[String(p.id)]
+        return { id: String(p.id), name: info?.name ?? 'Unknown', avatarUrl: info?.avatarUrl ?? null }
+      })
     const dueText = cols.find((c) => c.id === DATE_COL)?.text || null
 
     tasks.push({

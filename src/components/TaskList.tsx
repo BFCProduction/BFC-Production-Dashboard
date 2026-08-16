@@ -56,10 +56,11 @@ function Pill({ cell }: { cell: StatusCell | null }) {
   )
 }
 
-function Avatar({ name, size = 22 }: { name: string; size?: number }) {
+function Avatar({ name, url = null, size = 22 }: { name: string; url?: string | null; size?: number }) {
+  if (url) return <img src={url} alt={name} title={name} className="rounded-full object-cover ring-1 ring-white" style={{ width: size, height: size }} />
   const initials = name.split(' ').map(w => w[0]).slice(0, 2).join('')
   return (
-    <div className="rounded-full bg-gray-200 text-gray-600 grid place-items-center text-[10px] font-semibold ring-1 ring-white" style={{ width: size, height: size }}>
+    <div className="rounded-full bg-gray-200 text-gray-600 grid place-items-center text-[10px] font-semibold ring-1 ring-white" title={name} style={{ width: size, height: size }}>
       {initials}
     </div>
   )
@@ -93,7 +94,7 @@ function TaskRow({ task }: { task: MondayTask }) {
           <span className="truncate text-sm text-gray-900">{task.name}</span>
         </div>
         <div className="flex -space-x-1.5">
-          {task.assignees.length === 0 ? <span className="text-gray-300 text-xs">—</span> : task.assignees.map(a => <Avatar key={a.id} name={a.name} />)}
+          {task.assignees.length === 0 ? <span className="text-gray-300 text-xs">—</span> : task.assignees.map(a => <Avatar key={a.id} name={a.name} url={a.avatarUrl} />)}
         </div>
         <div className="min-w-0"><Pill cell={task.priority} /></div>
         <div className="min-w-0"><Pill cell={task.statusField} /></div>
@@ -107,7 +108,7 @@ function TaskRow({ task }: { task: MondayTask }) {
           {updates && updates.length === 0 && !loadingUpdates && <p className="text-[11px] text-gray-400">No updates.</p>}
           {updates?.map(u => (
             <div key={u.id} className="flex gap-2">
-              <Avatar name={u.authorName} size={20} />
+              <Avatar name={u.authorName} url={u.authorAvatarUrl} size={20} />
               <div className="min-w-0">
                 <div className="text-[11px] text-gray-500"><span className="font-medium text-gray-700">{u.authorName}</span> · {new Date(u.createdAt).toLocaleDateString()}</div>
                 <div className="text-xs text-gray-700 whitespace-pre-wrap break-words">{u.body}</div>

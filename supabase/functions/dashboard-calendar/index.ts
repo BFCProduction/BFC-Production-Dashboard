@@ -132,26 +132,49 @@ async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date, staffMap: Record
   return perPlan.flat()
 }
 
+const CHURCH_TZ = 'America/Chicago'
+
 function parseICal(ics: string, start: Date, end: Date): CalEvent[] {
   const out: CalEvent[] = []
   const blocks = ics.split('BEGIN:VEVENT').slice(1)
   for (const b of blocks) {
     if (/RRULE:/.test(b)) continue
-    const get = (k: string) => b.match(new RegExp(`${k}[^:\\n]*:([^\\r\\n]+)`))?.[1]?.trim()
-    const dtStart = get('DTSTART'); if (!dtStart) continue
-    const s = icalDate(dtStart); if (!s || s < start || s > end) continue
-    const dtEnd = get('DTEND'); const e = dtEnd ? icalDate(dtEnd) : null
-    out.push({ id: `ical-${get('UID') ?? crypto.randomUUID()}`, layer: 'personal', title: get('SUMMARY') ?? 'Busy', start: s.toISOString(), end: e ? e.toISOString() : null, allDay: dtStart.length === 8 })
+    const dt = parseDTLine(b, 'DTSTART'); if (!dt) continue
+    if (dt.date < start || dt.date > end) continue
+    const et = parseDTLine(b, 'DTEND')
+    const summary = b.match(/SUMMARY[^:\r\n]*:([^\r\n]+)/)?.[1]?.trim()
+    const uid = b.match(/UID[^:\r\n]*:([^\r\n]+)/)?.[1]?.trim()
+    out.push({
+      id: `ical-${uid ?? crypto.randomUUID()}`, layer: 'personal',
+      title: summary ?? 'Busy',
+      start: dt.date.toISOString(), end: et ? et.date.toISOString() : null,
+      allDay: dt.allDay,
+    })
   }
   return out
 }
 
-function icalDate(v: string): Date | null {
-  const m = v.match(/(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?/)
+// Parses a DTSTART/DTEND line honoring its TZID parameter (and Z / floating).
+function parseDTLine(block: string, key: string): { date: Date; allDay: boolean } | null {
+  const m = block.match(new RegExp(`${key}([^:\\r\\n]*):([^\\r\\n]+)`))
   if (!m) return null
-  const [, y, mo, d, h, mi, s, z] = m
-  if (!h) return new Date(Number(y), Number(mo) - 1, Number(d))
-  return z ? new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s)) : new Date(+y, +mo - 1, +d, +h, +mi, +s)
+  const tzid = m[1].match(/TZID=([^;:]+)/)?.[1]
+  const vm = m[2].trim().match(/(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?/)
+  if (!vm) return null
+  const [, y, mo, d, h, mi, s, z] = vm
+  if (!h) return { date: zonedToUtc(+y, +mo - 1, +d, 12, 0, 0, CHURCH_TZ), allDay: true } // date-only → noon church time
+  if (z) return { date: new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s)), allDay: false }
+  return { date: zonedToUtc(+y, +mo - 1, +d, +h, +mi, +s, tzid || CHURCH_TZ), allDay: false }
+}
+
+// Wall-clock time in an IANA tz → correct UTC instant.
+function zonedToUtc(y: number, moIdx: number, d: number, h: number, mi: number, s: number, tz: string): Date {
+  const utcGuess = Date.UTC(y, moIdx, d, h, mi, s)
+  const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const map: Record<string, string> = {}
+  for (const p of dtf.formatToParts(new Date(utcGuess))) map[p.type] = p.value
+  const asIfUtc = Date.UTC(+map.year, +map.month - 1, +map.day, +map.hour, +map.minute, +map.second)
+  return new Date(utcGuess - (asIfUtc - utcGuess))
 }
 
 async function fetchMondayDueTasks(start: Date, end: Date): Promise<CalEvent[]> {

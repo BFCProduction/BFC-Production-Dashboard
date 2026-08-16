@@ -170,10 +170,17 @@ export async function postClipboardFile(
 async function pruneToMaxSlots(): Promise<void> {
   const { data } = await supabase
     .from('clipboard_items')
-    .select('id')
+    .select('id, kind, file_url')
     .gt('expires_at', new Date().toISOString())
     .order('created_at', { ascending: false })
-  const ids = (data ?? []).map(r => r.id)
-  const stale = ids.slice(MAX_SLOTS)
-  if (stale.length) await supabase.from('clipboard_items').delete().in('id', stale)
+  const rows = data ?? []
+  const stale = rows.slice(MAX_SLOTS)
+  if (!stale.length) return
+  // Remove any file objects for rolled-off items (Storage API — the DB can't).
+  const paths = stale
+    .filter(r => r.kind === 'file' && r.file_url)
+    .map(r => (r.file_url as string).split('/clipboard-files/')[1])
+    .filter(Boolean)
+  if (paths.length) await supabase.storage.from('clipboard-files').remove(paths)
+  await supabase.from('clipboard_items').delete().in('id', stale.map(r => r.id))
 }

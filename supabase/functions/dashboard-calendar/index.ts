@@ -134,45 +134,173 @@ async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date, staffMap: Record
 
 const CHURCH_TZ = 'America/Chicago'
 
+interface DT { date: Date; y: number; mo: number; d: number; h: number; mi: number; s: number; tz: string; allDay: boolean }
+
 function parseICal(ics: string, start: Date, end: Date): CalEvent[] {
   const out: CalEvent[] = []
-  const blocks = ics.split('BEGIN:VEVENT').slice(1)
-  for (const b of blocks) {
-    if (/RRULE:/.test(b)) continue
+  const unfolded = ics.replace(/\r?\n[ \t]/g, '') // unfold wrapped lines
+  const blocks = unfolded.split('BEGIN:VEVENT').slice(1)
+
+  const parsed = blocks.map(b => {
+    const uid = b.match(/UID[^:\r\n]*:([^\r\n]+)/)?.[1]?.trim() ?? crypto.randomUUID()
+    const rid = b.match(/RECURRENCE-ID[^:\r\n]*:([^\r\n]+)/)?.[1]?.match(/(\d{4})(\d{2})(\d{2})/)
+    return { b, uid, ridKey: rid ? `${rid[1]}${rid[2]}${rid[3]}` : null }
+  })
+  // A modified instance (RECURRENCE-ID) replaces the master's occurrence on that date.
+  const overridden = new Set<string>()
+  for (const p of parsed) if (p.ridKey) overridden.add(`${p.uid}::${p.ridKey}`)
+
+  const seen = new Set<string>() // final dedupe by title + start
+  for (const p of parsed) {
+    const b = p.b
     const dt = parseDTLine(b, 'DTSTART'); if (!dt) continue
-    if (dt.date < start || dt.date > end) continue
     const et = parseDTLine(b, 'DTEND')
-    const summary = b.match(/SUMMARY[^:\r\n]*:([^\r\n]+)/)?.[1]?.trim()
-    const uid = b.match(/UID[^:\r\n]*:([^\r\n]+)/)?.[1]?.trim()
-    out.push({
-      id: `ical-${uid ?? crypto.randomUUID()}`, layer: 'personal',
-      title: summary ?? 'Busy',
-      start: dt.date.toISOString(), end: et ? et.date.toISOString() : null,
-      allDay: dt.allDay,
-    })
+    const durationMs = et ? (et.date.getTime() - dt.date.getTime()) : (dt.allDay ? 86400000 : 0)
+    const summary = b.match(/SUMMARY[^:\r\n]*:([^\r\n]+)/)?.[1]?.trim() ?? 'Busy'
+    const rrule = !p.ridKey ? b.match(/\bRRULE:([^\r\n]+)/)?.[1] : undefined // overrides never expand
+
+    const occurrences = rrule
+      ? expandRecurrence(dt, durationMs, rrule, collectExdates(b), start, end, p.uid, overridden)
+      : (dt.date >= start && dt.date <= end ? [{ start: dt.date, end: durationMs ? new Date(dt.date.getTime() + durationMs) : null }] : [])
+
+    for (const occ of occurrences) {
+      const key = `${summary}|${occ.start.toISOString()}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({
+        id: `ical-${p.uid}-${occ.start.getTime()}`, layer: 'personal',
+        title: summary, start: occ.start.toISOString(), end: occ.end ? occ.end.toISOString() : null,
+        allDay: dt.allDay,
+      })
+    }
   }
   return out
 }
 
-// Parses a DTSTART/DTEND line honoring its TZID parameter (and Z / floating).
-function parseDTLine(block: string, key: string): { date: Date; allDay: boolean } | null {
+function collectExdates(block: string): Set<string> {
+  const set = new Set<string>()
+  for (const m of block.matchAll(/EXDATE[^:\r\n]*:([^\r\n]+)/g)) {
+    for (const part of m[1].split(',')) {
+      const dm = part.match(/(\d{4})(\d{2})(\d{2})/)
+      if (dm) set.add(`${dm[1]}${dm[2]}${dm[3]}`)
+    }
+  }
+  return set
+}
+
+function parseDTLine(block: string, key: string): DT | null {
   const m = block.match(new RegExp(`${key}([^:\\r\\n]*):([^\\r\\n]+)`))
   if (!m) return null
   const tzid = m[1].match(/TZID=([^;:]+)/)?.[1]
   const vm = m[2].trim().match(/(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?/)
   if (!vm) return null
-  const [, y, mo, d, h, mi, s, z] = vm
-  if (!h) return { date: zonedToUtc(+y, +mo - 1, +d, 12, 0, 0, CHURCH_TZ), allDay: true } // date-only → noon church time
-  if (z) return { date: new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s)), allDay: false }
-  return { date: zonedToUtc(+y, +mo - 1, +d, +h, +mi, +s, tzid || CHURCH_TZ), allDay: false }
+  const [, ys, mos, ds, hs, mis, ss, z] = vm
+  const allDay = !hs
+  const tz = z ? 'UTC' : (tzid || CHURCH_TZ)
+  const h = allDay ? 12 : +hs, mi = allDay ? 0 : +mis, s = allDay ? 0 : +ss // date-only → noon
+  return { date: zonedToUtc(+ys, +mos - 1, +ds, h, mi, s, tz), y: +ys, mo: +mos, d: +ds, h, mi, s, tz, allDay }
+}
+
+// Expand an RRULE into occurrence instants within [rangeStart, rangeEnd].
+// Handles FREQ DAILY/WEEKLY/MONTHLY/YEARLY, INTERVAL, BYDAY (weekly), UNTIL,
+// COUNT, and EXDATE. Each occurrence's wall time is re-anchored in its tz (DST-safe).
+function expandRecurrence(dt: DT, durationMs: number, rrule: string, exdates: Set<string>, rangeStart: Date, rangeEnd: Date, uid: string, overridden: Set<string>): { start: Date; end: Date | null }[] {
+  const parts: Record<string, string> = {}
+  for (const kv of rrule.split(';')) { const [k, v] = kv.split('='); if (k) parts[k.toUpperCase()] = v }
+  const freq = parts.FREQ
+  const interval = Math.max(1, parseInt(parts.INTERVAL ?? '1', 10))
+  const count = parts.COUNT ? parseInt(parts.COUNT, 10) : null
+  const until = parts.UNTIL ? parseUntil(parts.UNTIL) : null
+  const DOW: Record<string, number> = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 }
+  const byday = (parts.BYDAY ?? '').split(',').map(x => DOW[x.slice(-2)]).filter(x => x !== undefined)
+
+  const results: { start: Date; end: Date | null }[] = []
+  let emitted = 0
+  const pushOcc = (oy: number, omIdx: number, od: number): boolean => {
+    // returns false to stop (count/until exhausted)
+    const startI = zonedToUtc(oy, omIdx, od, dt.h, dt.mi, dt.s, dt.tz)
+    if (startI.getTime() < dt.date.getTime() - 1000) return true // before series start; keep scanning
+    if (until && startI > until) return false
+    if (count !== null && emitted >= count) return false
+    emitted++
+    const key = `${oy}${String(omIdx + 1).padStart(2, '0')}${String(od).padStart(2, '0')}`
+    if (startI >= rangeStart && startI <= rangeEnd && !exdates.has(key) && !overridden.has(`${uid}::${key}`)) {
+      results.push({ start: startI, end: durationMs ? new Date(startI.getTime() + durationMs) : null })
+    }
+    return true
+  }
+
+  const guard = 4000
+  if (freq === 'WEEKLY') {
+    const days = byday.length ? byday : [new Date(Date.UTC(dt.y, dt.mo - 1, dt.d)).getUTCDay()]
+    // Monday of DTSTART's week (ICS default WKST=MO).
+    const startDow = new Date(Date.UTC(dt.y, dt.mo - 1, dt.d)).getUTCDay()
+    const firstWeek = Date.UTC(dt.y, dt.mo - 1, dt.d) - ((startDow + 6) % 7) * 86400000
+    // Fast-forward to the interval-week nearest rangeStart (we only need this window).
+    const weekMs = 7 * interval * 86400000
+    let week = new Date(firstWeek)
+    if (rangeStart.getTime() - 7 * 86400000 > firstWeek) {
+      const jumps = Math.floor((rangeStart.getTime() - 7 * 86400000 - firstWeek) / weekMs)
+      week = new Date(firstWeek + jumps * weekMs)
+      emitted = jumps * days.length // approximate COUNT after fast-forward
+    }
+    for (let i = 0; i < guard; i++) {
+      if (week.getTime() > rangeEnd.getTime() + 7 * 86400000) break
+      for (const dow of [...days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))) {
+        const occ = new Date(week.getTime() + ((dow + 6) % 7) * 86400000)
+        if (!pushOcc(occ.getUTCFullYear(), occ.getUTCMonth(), occ.getUTCDate())) return results
+      }
+      week = new Date(week.getTime() + 7 * interval * 86400000)
+    }
+    return results
+  }
+
+  // DAILY / MONTHLY / YEARLY: iterate calendar dates from DTSTART.
+  let cy = dt.y, cm = dt.mo - 1, cd = dt.d
+  // Fast-forward DAILY to near rangeStart to avoid long loops on old series.
+  if (freq === 'DAILY') {
+    const startMid = Date.UTC(dt.y, dt.mo - 1, dt.d)
+    const targetMid = Date.UTC(rangeStart.getUTCFullYear(), rangeStart.getUTCMonth(), rangeStart.getUTCDate())
+    if (targetMid > startMid) {
+      const k = Math.floor((targetMid - startMid) / 86400000 / interval)
+      const jumped = new Date(startMid + k * interval * 86400000)
+      cy = jumped.getUTCFullYear(); cm = jumped.getUTCMonth(); cd = jumped.getUTCDate()
+      emitted = k // approximate COUNT accounting after fast-forward
+    }
+  }
+  for (let i = 0; i < guard; i++) {
+    const probe = zonedToUtc(cy, cm, cd, dt.h, dt.mi, dt.s, dt.tz)
+    if (probe > rangeEnd) break
+    if (!pushOcc(cy, cm, cd)) break
+    if (freq === 'DAILY') { const n = new Date(Date.UTC(cy, cm, cd) + interval * 86400000); cy = n.getUTCFullYear(); cm = n.getUTCMonth(); cd = n.getUTCDate() }
+    else if (freq === 'MONTHLY') { cm += interval; while (cm > 11) { cm -= 12; cy++ } }
+    else if (freq === 'YEARLY') { cy += interval }
+    else break
+  }
+  return results
+}
+
+function parseUntil(v: string): Date | null {
+  const m = v.match(/(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})Z?)?/)
+  if (!m) return null
+  const [, y, mo, d, h, mi, s] = m
+  return new Date(Date.UTC(+y, +mo - 1, +d, h ? +h : 23, mi ? +mi : 59, s ? +s : 59))
 }
 
 // Wall-clock time in an IANA tz → correct UTC instant.
+// Intl.DateTimeFormat is expensive to construct, so cache one per timezone —
+// recurrence expansion calls this thousands of times.
+const _dtfCache = new Map<string, Intl.DateTimeFormat>()
+function dtfFor(tz: string): Intl.DateTimeFormat {
+  let f = _dtfCache.get(tz)
+  if (!f) { f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }); _dtfCache.set(tz, f) }
+  return f
+}
 function zonedToUtc(y: number, moIdx: number, d: number, h: number, mi: number, s: number, tz: string): Date {
   const utcGuess = Date.UTC(y, moIdx, d, h, mi, s)
-  const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  if (tz === 'UTC') return new Date(utcGuess)
   const map: Record<string, string> = {}
-  for (const p of dtf.formatToParts(new Date(utcGuess))) map[p.type] = p.value
+  for (const p of dtfFor(tz).formatToParts(new Date(utcGuess))) map[p.type] = p.value
   const asIfUtc = Date.UTC(+map.year, +map.month - 1, +map.day, +map.hour, +map.minute, +map.second)
   return new Date(utcGuess - (asIfUtc - utcGuess))
 }

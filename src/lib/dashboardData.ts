@@ -70,9 +70,12 @@ export async function loadCrewCalendars(): Promise<CrewCalendar[]> {
 }
 
 export async function upsertMyCalendar(pcoId: string, personName: string, icalUrl: string): Promise<void> {
+  // delete-then-insert rather than upsert: ON CONFLICT DO UPDATE needs privileges
+  // that conflict with keeping ical_url unreadable, but plain insert/delete are fine.
+  await supabase.from('dashboard_calendar_links').delete().eq('pco_id', pcoId)
   const { error } = await supabase
     .from('dashboard_calendar_links')
-    .upsert({ pco_id: pcoId, person_name: personName, ical_url: icalUrl.trim(), active: true }, { onConflict: 'pco_id' })
+    .insert({ pco_id: pcoId, person_name: personName, ical_url: icalUrl.trim(), active: true })
   if (error) throw error
 }
 

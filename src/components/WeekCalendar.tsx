@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, AlertCircle } from 'lucide-react'
+import { ChevronLeft, ChevronRight, AlertCircle, Users } from 'lucide-react'
 import { useAuth } from '../context/authState'
 import { loadWeek, type WeekPayload } from '../lib/dashboardData'
+import { CalendarSettings } from './CalendarSettings'
 import { getWeekRange, isoDate, sameDay, fmtTime } from '../lib/week'
 import type { CalendarEvent, CalendarLayer } from '../types'
 
@@ -36,6 +37,8 @@ export function WeekCalendar() {
   const [payload, setPayload] = useState<WeekPayload | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [reloadNonce, setReloadNonce] = useState(0)
 
   useEffect(() => {
     let live = true
@@ -52,7 +55,7 @@ export function WeekCalendar() {
     }
     void run()
     return () => { live = false }
-  }, [offset, sessionToken])
+  }, [offset, sessionToken, reloadNonce])
 
   const { days } = getWeekRange(new Date(), offset)
   const events = payload?.events ?? []
@@ -83,11 +86,15 @@ export function WeekCalendar() {
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <button onClick={() => setSettingsOpen(true)} title="Crew calendars" className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg hover:bg-gray-100 text-gray-600"><Users size={15} /><span className="hidden sm:inline">Calendars</span></button>
+          <span className="w-px h-4 bg-gray-200 mx-0.5" />
           <button onClick={() => setOffset(o => o - 1)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600"><ChevronLeft size={18} /></button>
           <button onClick={() => setOffset(0)} className="text-xs font-medium px-2 py-1 rounded-lg hover:bg-gray-100 text-gray-700">{offset === 0 ? 'This week' : 'Today'}</button>
           <button onClick={() => setOffset(o => o + 1)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600"><ChevronRight size={18} /></button>
         </div>
       </header>
+
+      {settingsOpen && <CalendarSettings onClose={() => setSettingsOpen(false)} onChanged={() => setReloadNonce(n => n + 1)} />}
 
       {payload && payload.unknownPcoTimeNames.length > 0 && (
         <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">

@@ -49,6 +49,43 @@ export async function loadHours(offsetWeeks: number, sessionToken: string | null
   return people
 }
 
+// ── Personal crew calendars (opt-in) ─────────────────────────────────────────
+// The secret iCal URL is write-only from the client's perspective — it's stored
+// but never read back (the public view omits it; the edge function reads it
+// server-side). So we only ever load names + active state here.
+
+export interface CrewCalendar {
+  pcoId: string
+  personName: string
+  active: boolean
+}
+
+export async function loadCrewCalendars(): Promise<CrewCalendar[]> {
+  const { data, error } = await supabase
+    .from('dashboard_calendar_links_public')
+    .select('pco_id, person_name, active')
+    .order('person_name')
+  if (error) throw error
+  return (data ?? []).map(r => ({ pcoId: r.pco_id, personName: r.person_name, active: r.active }))
+}
+
+export async function upsertMyCalendar(pcoId: string, personName: string, icalUrl: string): Promise<void> {
+  const { error } = await supabase
+    .from('dashboard_calendar_links')
+    .upsert({ pco_id: pcoId, person_name: personName, ical_url: icalUrl.trim(), active: true }, { onConflict: 'pco_id' })
+  if (error) throw error
+}
+
+export async function setMyCalendarActive(pcoId: string, active: boolean): Promise<void> {
+  const { error } = await supabase.from('dashboard_calendar_links').update({ active }).eq('pco_id', pcoId)
+  if (error) throw error
+}
+
+export async function removeMyCalendar(pcoId: string): Promise<void> {
+  const { error } = await supabase.from('dashboard_calendar_links').delete().eq('pco_id', pcoId)
+  if (error) throw error
+}
+
 // ── Community clipboard (Supabase table + storage; no external creds) ─────────
 
 export async function loadClipboard(): Promise<ClipboardItem[]> {

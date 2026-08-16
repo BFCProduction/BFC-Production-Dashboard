@@ -20,7 +20,7 @@ interface Assignee { name: string; position: string | null; status: string | nul
 interface CalEvent {
   id: string; layer: 'personal' | 'pco' | 'monday'; title: string
   start: string; end: string | null; allDay: boolean
-  personName?: string; context?: string; assignees?: Assignee[]; sourceUrl?: string
+  personName?: string; calendarId?: string; context?: string; assignees?: Assignee[]; sourceUrl?: string
 }
 
 Deno.serve(async (req) => {
@@ -36,7 +36,7 @@ Deno.serve(async (req) => {
   const db = serviceClient()
 
   const [links, staffRows, mondayEvents] = await Promise.all([
-    db.from('dashboard_calendar_links').select('person_name, ical_url, active').eq('active', true),
+    db.from('dashboard_calendar_links').select('id, person_name, label, ical_url, active').eq('active', true),
     db.from('dashboard_staff').select('pco_id, name'),
     fetchMondayDueTasks(rangeStart, rangeEnd).catch(() => [] as CalEvent[]),
   ])
@@ -50,7 +50,11 @@ Deno.serve(async (req) => {
     try {
       const res = await fetch(link.ical_url)
       if (!res.ok) return [] as CalEvent[]
-      return parseICal(await res.text(), rangeStart, rangeEnd).map((ev) => ({ ...ev, personName: link.person_name }))
+      return parseICal(await res.text(), rangeStart, rangeEnd).map((ev) => ({
+        ...ev,
+        personName: link.label ? `${link.person_name} · ${link.label}` : link.person_name,
+        calendarId: String(link.id),
+      }))
     } catch { return [] as CalEvent[] }
   }))
   for (const list of icalResults) for (const ev of list) events.push(ev)

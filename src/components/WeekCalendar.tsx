@@ -224,6 +224,18 @@ export function WeekCalendar() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [reloadNonce, setReloadNonce] = useState(0)
   const [sheetEvent, setSheetEvent] = useState<CalendarEvent | null>(null)
+  const [hidden, setHidden] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('cal_hidden') ?? '[]')) } catch { return new Set() }
+  })
+
+  function toggleHidden(id: string) {
+    setHidden(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      localStorage.setItem('cal_hidden', JSON.stringify([...next]))
+      return next
+    })
+  }
 
   useEffect(() => {
     let live = true
@@ -243,7 +255,8 @@ export function WeekCalendar() {
   }, [offset, sessionToken, reloadNonce])
 
   const { days } = getWeekRange(new Date(), offset)
-  const events = payload?.events ?? []
+  // Per-viewer visibility: hide events from calendars the user toggled off.
+  const events = (payload?.events ?? []).filter(e => !(e.calendarId && hidden.has(e.calendarId)))
   const timed = events.filter(e => !e.allDay && e.end)
   const allDay = events.filter(e => e.allDay || !e.end)
 
@@ -277,7 +290,7 @@ export function WeekCalendar() {
         </div>
       </header>
 
-      {settingsOpen && <CalendarSettings onClose={() => setSettingsOpen(false)} onChanged={() => setReloadNonce(n => n + 1)} />}
+      {settingsOpen && <CalendarSettings onClose={() => setSettingsOpen(false)} onChanged={() => setReloadNonce(n => n + 1)} hidden={hidden} onToggleHidden={toggleHidden} />}
       {sheetEvent && <DetailSheet event={sheetEvent} onClose={() => setSheetEvent(null)} />}
 
       {payload && payload.unknownPcoTimeNames.length > 0 && (

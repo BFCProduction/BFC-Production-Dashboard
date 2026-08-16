@@ -19,6 +19,7 @@ export interface CalendarEvent {
   end: string | null     // ISO 8601; null = all-day / no duration
   allDay: boolean
   personName?: string    // for personal-calendar chips
+  calendarId?: string    // dashboard_calendar_links.id — for per-viewer show/hide
   context?: string       // PCO: service label (9:00/11:00/…) or special-event plan title
   assignees?: EventAssignee[] // PCO: paid staff scheduled on the plan
   location?: string

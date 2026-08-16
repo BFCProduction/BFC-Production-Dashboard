@@ -55,37 +55,32 @@ export async function loadHours(offsetWeeks: number, sessionToken: string | null
 // server-side). So we only ever load names + active state here.
 
 export interface CrewCalendar {
+  id: string
   pcoId: string
   personName: string
+  label: string | null
   active: boolean
 }
 
 export async function loadCrewCalendars(): Promise<CrewCalendar[]> {
   const { data, error } = await supabase
     .from('dashboard_calendar_links_public')
-    .select('pco_id, person_name, active')
+    .select('id, pco_id, person_name, label, active')
     .order('person_name')
   if (error) throw error
-  return (data ?? []).map(r => ({ pcoId: r.pco_id, personName: r.person_name, active: r.active }))
+  return (data ?? []).map(r => ({ id: r.id, pcoId: r.pco_id, personName: r.person_name, label: r.label, active: r.active }))
 }
 
-export async function upsertMyCalendar(pcoId: string, personName: string, icalUrl: string): Promise<void> {
-  // delete-then-insert rather than upsert: ON CONFLICT DO UPDATE needs privileges
-  // that conflict with keeping ical_url unreadable, but plain insert/delete are fine.
-  await supabase.from('dashboard_calendar_links').delete().eq('pco_id', pcoId)
+/** Add a calendar for the current user (multiple allowed). Plain insert. */
+export async function addMyCalendar(pcoId: string, personName: string, icalUrl: string, label: string | null): Promise<void> {
   const { error } = await supabase
     .from('dashboard_calendar_links')
-    .insert({ pco_id: pcoId, person_name: personName, ical_url: icalUrl.trim(), active: true })
+    .insert({ pco_id: pcoId, person_name: personName, ical_url: icalUrl.trim(), label: label?.trim() || null, active: true })
   if (error) throw error
 }
 
-export async function setMyCalendarActive(pcoId: string, active: boolean): Promise<void> {
-  const { error } = await supabase.from('dashboard_calendar_links').update({ active }).eq('pco_id', pcoId)
-  if (error) throw error
-}
-
-export async function removeMyCalendar(pcoId: string): Promise<void> {
-  const { error } = await supabase.from('dashboard_calendar_links').delete().eq('pco_id', pcoId)
+export async function removeCalendar(id: string): Promise<void> {
+  const { error } = await supabase.from('dashboard_calendar_links').delete().eq('id', id)
   if (error) throw error
 }
 

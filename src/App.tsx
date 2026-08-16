@@ -34,7 +34,7 @@ export default function App() {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-20" style={{ background: '#1a1a1a' }}>
-        <div className="mx-auto max-w-5xl flex items-center justify-between px-4 md:px-6 h-14">
+        <div className="w-full flex items-center justify-between px-4 md:px-8 h-14">
           <div className="flex items-center gap-3">
             <img src={bfcLogo} alt="BFC Production" className="h-6 md:h-7 w-auto object-contain" />
             <span className="hidden sm:inline text-gray-600 text-sm">·</span>
@@ -51,7 +51,7 @@ export default function App() {
 
       <DesktopTabs active={tab} setActive={goTo} />
 
-      <main className="mx-auto max-w-5xl px-3 md:px-6 py-4 space-y-4 pb-28 md:pb-8">
+      <main className="w-full px-3 md:px-8 py-4 space-y-4 pb-28 md:pb-8">
         <LinksRow />
 
         {visited.has('calendar') && (

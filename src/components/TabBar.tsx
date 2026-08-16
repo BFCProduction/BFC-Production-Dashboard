@@ -13,7 +13,7 @@ export const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
 export function DesktopTabs({ active, setActive }: { active: Tab; setActive: (t: Tab) => void }) {
   return (
     <div className="hidden md:flex items-center gap-1 border-b border-gray-200 bg-white/60">
-      <div className="mx-auto max-w-5xl w-full px-6 flex items-center gap-1">
+      <div className="w-full px-8 flex items-center gap-1">
         {TABS.map(t => {
           const Icon = t.icon
           const isActive = active === t.id

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, AlertCircle, Users, ExternalLink, X } from 'lucide-react'
 import { useAuth } from '../context/authState'
-import { loadWeek, type WeekPayload } from '../lib/dashboardData'
+import { loadWeek, loadCrewCalendars, type WeekPayload, type CrewCalendar } from '../lib/dashboardData'
 import { getWeekRange, isoDate, sameDay, fmtTime } from '../lib/week'
 import { useIsMobile } from '../lib/useIsMobile'
 import type { CalendarEvent, CalendarLayer } from '../types'
@@ -228,6 +228,8 @@ export function WeekCalendar() {
     try { return new Set(JSON.parse(localStorage.getItem('cal_hidden') ?? '[]')) } catch { return new Set() }
   })
 
+  const [crew, setCrew] = useState<CrewCalendar[]>([])
+
   function toggleHidden(id: string) {
     setHidden(prev => {
       const next = new Set(prev)
@@ -236,6 +238,8 @@ export function WeekCalendar() {
       return next
     })
   }
+
+  useEffect(() => { loadCrewCalendars().then(setCrew).catch(() => {}) }, [reloadNonce])
 
   useEffect(() => {
     let live = true
@@ -290,8 +294,24 @@ export function WeekCalendar() {
         </div>
       </header>
 
-      {settingsOpen && <CalendarSettings onClose={() => setSettingsOpen(false)} onChanged={() => setReloadNonce(n => n + 1)} hidden={hidden} onToggleHidden={toggleHidden} />}
+      {settingsOpen && <CalendarSettings onClose={() => setSettingsOpen(false)} onChanged={() => setReloadNonce(n => n + 1)} />}
       {sheetEvent && <DetailSheet event={sheetEvent} onClose={() => setSheetEvent(null)} />}
+
+      {/* Crew-calendar filter — toggle any shared calendar on/off in your view */}
+      {crew.filter(c => c.active).length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-4 py-2 border-b border-gray-100 bg-gray-50/50">
+          {crew.filter(c => c.active).map(c => {
+            const visible = !hidden.has(c.id)
+            return (
+              <button key={c.id} onClick={() => toggleHidden(c.id)}
+                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${visible ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-400'}`}>
+                <span className={`w-2 h-2 rounded-full ${visible ? 'bg-blue-500' : 'bg-gray-300'}`} />
+                {c.personName}{c.label ? ` · ${c.label}` : ''}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {payload && payload.unknownPcoTimeNames.length > 0 && (
         <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">

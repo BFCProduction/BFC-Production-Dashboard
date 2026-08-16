@@ -5,6 +5,12 @@ export type AppAccessLevel = 'user' | 'manager' | 'admin'
 // ── Calendar ────────────────────────────────────────────────────────────────
 export type CalendarLayer = 'personal' | 'pco' | 'monday'
 
+export interface EventAssignee {
+  name: string
+  position: string | null
+  status: string | null   // PCO scheduling status (Confirmed / Unconfirmed / …)
+}
+
 export interface CalendarEvent {
   id: string
   layer: CalendarLayer
@@ -13,6 +19,8 @@ export interface CalendarEvent {
   end: string | null     // ISO 8601; null = all-day / no duration
   allDay: boolean
   personName?: string    // for personal-calendar chips
+  context?: string       // PCO: service label (9:00/11:00/…) or special-event plan title
+  assignees?: EventAssignee[] // PCO: paid staff scheduled on the plan
   location?: string
   sourceUrl?: string     // deep link back to PCO / monday / Google
 }

@@ -1,9 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // dashboard-calendar — merged week view: PCO plan times + crew Google calendars
-// (iCal) + monday task due-dates. All creds server-side.
+// (iCal) + monday task due-dates. All creds server-side. Fetches parallelized.
 //
-// PCO: ALL plan times across the production-relevant service types are shown
-// (no keep/skip filtering — Alan's call, 2026-08-16). Fetches are parallelized.
+// PCO events carry `context` (service label, or the plan title for Special
+// Events) and `assignees` (paid staff scheduled on that plan).
 // ─────────────────────────────────────────────────────────────────────────────
 import { corsHeaders, json } from '../_shared/cors.ts'
 import { requireStaff, serviceClient } from '../_shared/session.ts'
@@ -11,11 +11,16 @@ import { requireStaff, serviceClient } from '../_shared/session.ts'
 const PCO_BASE = 'https://api.planningcenteronline.com/services/v2'
 // 9:00, 11:00, Special Events, Celebrate Recovery, BFC Students.
 const SERVICE_TYPES = ['30897', '27010', '571895', '232033', '189466']
+const ST_LABEL: Record<string, string> = {
+  '30897': '9:00', '27010': '11:00', '232033': 'Celebrate Recovery', '189466': 'BFC Students',
+}
+const SPECIAL_ST = '571895'
 
+interface Assignee { name: string; position: string | null; status: string | null }
 interface CalEvent {
   id: string; layer: 'personal' | 'pco' | 'monday'; title: string
   start: string; end: string | null; allDay: boolean
-  personName?: string; sourceUrl?: string
+  personName?: string; context?: string; assignees?: Assignee[]; sourceUrl?: string
 }
 
 Deno.serve(async (req) => {
@@ -30,12 +35,15 @@ Deno.serve(async (req) => {
   const events: CalEvent[] = []
   const db = serviceClient()
 
-  const [links, pcoEvents, mondayEvents] = await Promise.all([
+  const [links, staffRows, mondayEvents] = await Promise.all([
     db.from('dashboard_calendar_links').select('person_name, ical_url, active').eq('active', true),
-    fetchPcoEvents(rangeStart, rangeEnd),
+    db.from('dashboard_staff').select('pco_id, name'),
     fetchMondayDueTasks(rangeStart, rangeEnd).catch(() => [] as CalEvent[]),
   ])
+  const staffMap: Record<string, string> = {}
+  for (const s of staffRows.data ?? []) staffMap[String(s.pco_id)] = s.name ?? ''
 
+  const pcoEvents = await fetchPcoEvents(rangeStart, rangeEnd, staffMap)
   for (const ev of pcoEvents) events.push(ev)
 
   const icalResults = await Promise.all((links.data ?? []).map(async (link) => {
@@ -49,16 +57,14 @@ Deno.serve(async (req) => {
 
   for (const ev of mondayEvents) events.push(ev)
 
-  // unknownPcoTimeNames retained (empty) for frontend compatibility.
   return json({ events, unknownPcoTimeNames: [] })
 })
 
-async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date): Promise<CalEvent[]> {
+async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date, staffMap: Record<string, string>): Promise<CalEvent[]> {
   const appId = Deno.env.get('PCO_APP_ID')
   const secret = Deno.env.get('PCO_SECRET')
   if (!appId || !secret) return []
-  const auth = 'Basic ' + btoa(`${appId}:${secret}`)
-  const h = { Authorization: auth }
+  const h = { Authorization: 'Basic ' + btoa(`${appId}:${secret}`) }
 
   const planLists = await Promise.all(SERVICE_TYPES.map(async (st) => {
     const r = await fetch(`${PCO_BASE}/service_types/${st}/plans?filter=future&per_page=4&order=sort_date`, { headers: h })
@@ -69,23 +75,57 @@ async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date): Promise<CalEven
   }))
   const plans = planLists.flat()
 
-  const timeLists = await Promise.all(plans.map(async (plan) => {
-    const r = await fetch(`${PCO_BASE}/service_types/${plan.st}/plans/${plan.id}/plan_times`, { headers: h })
-    if (!r.ok) return [] as CalEvent[]
-    const j = await r.json()
+  const perPlan = await Promise.all(plans.map(async (plan) => {
+    const [timesRes, tmRes] = await Promise.all([
+      fetch(`${PCO_BASE}/service_types/${plan.st}/plans/${plan.id}/plan_times`, { headers: h }),
+      fetch(`${PCO_BASE}/service_types/${plan.st}/plans/${plan.id}/team_members?per_page=100`, { headers: h }),
+    ])
+
+    // Paid staff scheduled on this plan (skip declined). Dedupe per person,
+    // merging multiple positions into one entry.
+    const assignees: Assignee[] = []
+    if (tmRes.ok) {
+      const tj = await tmRes.json()
+      const byPerson = new Map<string, { name: string; positions: Set<string>; status: string | null }>()
+      // deno-lint-ignore no-explicit-any
+      for (const tm of (tj.data ?? []) as any[]) {
+        const personId = tm.relationships?.person?.data?.id
+        const name = personId ? staffMap[String(personId)] : undefined
+        if (!name) continue
+        const status = tm.attributes?.status ?? null
+        if (typeof status === 'string' && status.toLowerCase() === 'declined') continue
+        const entry = byPerson.get(String(personId)) ?? { name, positions: new Set<string>(), status }
+        const pos = tm.attributes?.team_position_name
+        if (pos) entry.positions.add(pos)
+        byPerson.set(String(personId), entry)
+      }
+      for (const e of byPerson.values()) {
+        assignees.push({ name: e.name, position: [...e.positions].join(', ') || null, status: e.status })
+      }
+    }
+
+    const context = ST_LABEL[plan.st] ?? (plan.title || 'Special Event')
     const out: CalEvent[] = []
-    // deno-lint-ignore no-explicit-any
-    for (const t of (j.data ?? []) as any[]) {
-      const a = t.attributes
-      if (!a.starts_at) continue
-      const s = new Date(a.starts_at)
-      if (s < rangeStart || s > rangeEnd) continue
-      const name = a.name || (a.time_type === 'service' ? (plan.title || 'Service') : (plan.title || 'Plan Time'))
-      out.push({ id: `pco-${t.id}`, layer: 'pco', title: name, start: a.starts_at, end: a.ends_at ?? null, allDay: false, sourceUrl: `https://services.planningcenteronline.com/plans/${plan.id}` })
+    if (timesRes.ok) {
+      const j = await timesRes.json()
+      // deno-lint-ignore no-explicit-any
+      for (const t of (j.data ?? []) as any[]) {
+        const a = t.attributes
+        if (!a.starts_at) continue
+        const s = new Date(a.starts_at)
+        if (s < rangeStart || s > rangeEnd) continue
+        const name = a.name || (a.time_type === 'service' ? (plan.title || 'Service') : (plan.title || 'Plan Time'))
+        out.push({
+          id: `pco-${t.id}`, layer: 'pco', title: name,
+          start: a.starts_at, end: a.ends_at ?? null, allDay: false,
+          context, assignees,
+          sourceUrl: `https://services.planningcenteronline.com/plans/${plan.id}`,
+        })
+      }
     }
     return out
   }))
-  return timeLists.flat()
+  return perPlan.flat()
 }
 
 function parseICal(ics: string, start: Date, end: Date): CalEvent[] {

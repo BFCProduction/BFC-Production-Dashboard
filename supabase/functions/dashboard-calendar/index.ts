@@ -1,28 +1,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// dashboard-calendar — merged week view: PCO plan times (classified) +
-// crew Google calendars (iCal) + monday task due-dates.
+// dashboard-calendar — merged week view: PCO plan times + crew Google calendars
+// (iCal) + monday task due-dates. All creds server-side.
 //
-// POST { start:'YYYY-MM-DD', end:'YYYY-MM-DD' }. All creds are server-side.
-// PCO fetches are parallelized (plans across service types, then all plan_times
-// at once) to keep this fast.
+// PCO: ALL plan times across the production-relevant service types are shown
+// (no keep/skip filtering — Alan's call, 2026-08-16). Fetches are parallelized.
 // ─────────────────────────────────────────────────────────────────────────────
 import { corsHeaders, json } from '../_shared/cors.ts'
 import { requireStaff, serviceClient } from '../_shared/session.ts'
 
 const PCO_BASE = 'https://api.planningcenteronline.com/services/v2'
-const SERVICE_TYPES = ['30897', '27010', '571895']
-
-const KEEP = ['production meeting', 'sunday rehearsal', 'sound check', 'camera call', 'load in', 'load out', 'service', 'orchestra/band rehearsal', 'orchestra rehearsal', 'band rehearsal', 'mid-week rehearsal', 'rehearsal']
-const SKIP = ['praise team vocal rehearsal', 'vocal rehearsal', 'choir rehearsal', 'choir sound check', 'closing song sound check', 'choir and orchestra team meeting', 'choir and orchestra', 'churchwide prayer']
-
-type Disposition = 'keep' | 'skip' | 'unknown'
-function classify(name: string, keep: string[], skip: string[]): Disposition {
-  const n = name.trim().toLowerCase()
-  if (!n) return 'unknown'
-  if (skip.some((p) => n.includes(p))) return 'skip'
-  if (keep.some((p) => n.includes(p))) return 'keep'
-  return 'unknown'
-}
+// 9:00, 11:00, Special Events, Celebrate Recovery, BFC Students.
+const SERVICE_TYPES = ['30897', '27010', '571895', '232033', '189466']
 
 interface CalEvent {
   id: string; layer: 'personal' | 'pco' | 'monday'; title: string
@@ -40,53 +28,38 @@ Deno.serve(async (req) => {
   const rangeEnd = new Date(end + 'T23:59:59')
 
   const events: CalEvent[] = []
-  const unknownNames = new Set<string>()
-
   const db = serviceClient()
 
-  // Run the three independent data sources concurrently.
-  const [rulesRes, links, pcoEvents, mondayEvents] = await Promise.all([
-    db.from('dashboard_pco_time_rules').select('name_pattern, disposition'),
+  const [links, pcoEvents, mondayEvents] = await Promise.all([
     db.from('dashboard_calendar_links').select('person_name, ical_url, active').eq('active', true),
-    fetchPcoEvents(rangeStart, rangeEnd, unknownNames),
+    fetchPcoEvents(rangeStart, rangeEnd),
     fetchMondayDueTasks(rangeStart, rangeEnd).catch(() => [] as CalEvent[]),
   ])
 
-  // Apply DB classifier overrides to the (already collected) PCO candidates.
-  const rules = rulesRes.data ?? []
-  const keep = [...KEEP, ...rules.filter((r) => r.disposition === 'keep').map((r) => r.name_pattern)]
-  const skip = [...SKIP, ...rules.filter((r) => r.disposition === 'skip').map((r) => r.name_pattern)]
-  for (const ev of pcoEvents) {
-    const disp = classify(ev.title, keep, skip)
-    if (disp === 'skip') continue
-    if (disp === 'unknown' && ev.title) unknownNames.add(ev.title)
-    events.push(ev)
-  }
+  for (const ev of pcoEvents) events.push(ev)
 
-  // Crew Google calendars (parallel fetch of every opt-in iCal).
   const icalResults = await Promise.all((links.data ?? []).map(async (link) => {
     try {
       const res = await fetch(link.ical_url)
-      if (!res.ok) return []
+      if (!res.ok) return [] as CalEvent[]
       return parseICal(await res.text(), rangeStart, rangeEnd).map((ev) => ({ ...ev, personName: link.person_name }))
-    } catch { return [] }
+    } catch { return [] as CalEvent[] }
   }))
   for (const list of icalResults) for (const ev of list) events.push(ev)
 
   for (const ev of mondayEvents) events.push(ev)
 
-  return json({ events, unknownPcoTimeNames: [...unknownNames] })
+  // unknownPcoTimeNames retained (empty) for frontend compatibility.
+  return json({ events, unknownPcoTimeNames: [] })
 })
 
-// Returns UNCLASSIFIED pco candidates (title = plan-time name); caller classifies.
-async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date, _unknown: Set<string>): Promise<CalEvent[]> {
+async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date): Promise<CalEvent[]> {
   const appId = Deno.env.get('PCO_APP_ID')
   const secret = Deno.env.get('PCO_SECRET')
   if (!appId || !secret) return []
   const auth = 'Basic ' + btoa(`${appId}:${secret}`)
   const h = { Authorization: auth }
 
-  // 1) All service types' plans in parallel.
   const planLists = await Promise.all(SERVICE_TYPES.map(async (st) => {
     const r = await fetch(`${PCO_BASE}/service_types/${st}/plans?filter=future&per_page=4&order=sort_date`, { headers: h })
     if (!r.ok) return [] as { st: string; id: string; title: string }[]
@@ -96,7 +69,6 @@ async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date, _unknown: Set<st
   }))
   const plans = planLists.flat()
 
-  // 2) All plan_times in parallel.
   const timeLists = await Promise.all(plans.map(async (plan) => {
     const r = await fetch(`${PCO_BASE}/service_types/${plan.st}/plans/${plan.id}/plan_times`, { headers: h })
     if (!r.ok) return [] as CalEvent[]
@@ -108,8 +80,8 @@ async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date, _unknown: Set<st
       if (!a.starts_at) continue
       const s = new Date(a.starts_at)
       if (s < rangeStart || s > rangeEnd) continue
-      const name = a.name || (a.time_type === 'service' ? (plan.title || 'Service') : '')
-      out.push({ id: `pco-${t.id}`, layer: 'pco', title: name || 'Service', start: a.starts_at, end: a.ends_at ?? null, allDay: false, sourceUrl: `https://services.planningcenteronline.com/plans/${plan.id}` })
+      const name = a.name || (a.time_type === 'service' ? (plan.title || 'Service') : (plan.title || 'Plan Time'))
+      out.push({ id: `pco-${t.id}`, layer: 'pco', title: name, start: a.starts_at, end: a.ends_at ?? null, allDay: false, sourceUrl: `https://services.planningcenteronline.com/plans/${plan.id}` })
     }
     return out
   }))
@@ -139,7 +111,7 @@ function icalDate(v: string): Date | null {
 }
 
 async function fetchMondayDueTasks(start: Date, end: Date): Promise<CalEvent[]> {
-  const token = Deno.env.get('MONDAY_PRODUCTION_BOARD_ID') ? Deno.env.get('MONDAY_API_TOKEN') : Deno.env.get('MONDAY_API_TOKEN')
+  const token = Deno.env.get('MONDAY_API_TOKEN')
   const board = Deno.env.get('MONDAY_PRODUCTION_BOARD_ID') ?? Deno.env.get('MONDAY_BOARD_ID')
   if (!token || !board) return []
   const query = `query { boards(ids: [${board}]) { items_page(limit: 100) { items { id name column_values { id text type } } } } }`
@@ -157,7 +129,6 @@ async function fetchMondayDueTasks(start: Date, end: Date): Promise<CalEvent[]> 
   return out
 }
 
-// Handles "2026-08-13" and "2026-08-13 16:00" (and T-separated); undated → null.
 function parseDue(due: string | null | undefined): Date | null {
   if (!due) return null
   const m = due.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/)

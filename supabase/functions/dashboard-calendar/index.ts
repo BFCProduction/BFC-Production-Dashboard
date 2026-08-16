@@ -47,15 +47,13 @@ Deno.serve(async (req) => {
   for (const ev of pcoEvents) events.push(ev)
 
   const icalResults = await Promise.all((links.data ?? []).map(async (link) => {
-    try {
-      const res = await fetch(link.ical_url)
-      if (!res.ok) return [] as CalEvent[]
-      return parseICal(await res.text(), rangeStart, rangeEnd).map((ev) => ({
-        ...ev,
-        personName: link.label ? `${link.person_name} · ${link.label}` : link.person_name,
-        calendarId: String(link.id),
-      }))
-    } catch { return [] as CalEvent[] }
+    const text = await fetchIcalCached(link.ical_url)
+    if (!text) return [] as CalEvent[]
+    return parseICal(text, rangeStart, rangeEnd).map((ev) => ({
+      ...ev,
+      personName: link.label ? `${link.person_name} · ${link.label}` : link.person_name,
+      calendarId: String(link.id),
+    }))
   }))
   for (const list of icalResults) for (const ev of list) events.push(ev)
 
@@ -79,17 +77,29 @@ async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date, staffMap: Record
   }))
   const plans = planLists.flat()
 
-  const perPlan = await Promise.all(plans.map(async (plan) => {
-    const [timesRes, tmRes] = await Promise.all([
-      fetch(`${PCO_BASE}/service_types/${plan.st}/plans/${plan.id}/plan_times`, { headers: h }),
-      fetch(`${PCO_BASE}/service_types/${plan.st}/plans/${plan.id}/team_members?per_page=100`, { headers: h }),
-    ])
+  // Phase 1: plan_times for all upcoming plans (light), keep only plans with a
+  // time in the requested week.
+  // deno-lint-ignore no-explicit-any
+  const timed = await Promise.all(plans.map(async (plan): Promise<{ plan: typeof plans[number]; times: any[] }> => {
+    const r = await fetch(`${PCO_BASE}/service_types/${plan.st}/plans/${plan.id}/plan_times`, { headers: h })
+    if (!r.ok) return { plan, times: [] }
+    const j = await r.json()
+    // deno-lint-ignore no-explicit-any
+    const times = (j.data ?? []).filter((t: any) => {
+      const at = t.attributes?.starts_at; if (!at) return false
+      const s = new Date(at); return s >= rangeStart && s <= rangeEnd
+    })
+    return { plan, times }
+  }))
+  const relevant = timed.filter(x => x.times.length > 0)
 
-    // Paid staff scheduled on this plan (skip declined). Dedupe per person,
-    // merging multiple positions into one entry.
-    const assignees: Assignee[] = []
-    if (tmRes.ok) {
-      const tj = await tmRes.json()
+  // Phase 2: crew assignments ONLY for in-window plans.
+  const assigneesByPlan = new Map<string, Assignee[]>()
+  await Promise.all(relevant.map(async ({ plan }) => {
+    const r = await fetch(`${PCO_BASE}/service_types/${plan.st}/plans/${plan.id}/team_members?per_page=100`, { headers: h })
+    const list: Assignee[] = []
+    if (r.ok) {
+      const tj = await r.json()
       const byPerson = new Map<string, { name: string; positions: Set<string>; status: string | null }>()
       // deno-lint-ignore no-explicit-any
       for (const tm of (tj.data ?? []) as any[]) {
@@ -103,33 +113,49 @@ async function fetchPcoEvents(rangeStart: Date, rangeEnd: Date, staffMap: Record
         if (pos) entry.positions.add(pos)
         byPerson.set(String(personId), entry)
       }
-      for (const e of byPerson.values()) {
-        assignees.push({ name: e.name, position: [...e.positions].join(', ') || null, status: e.status })
-      }
+      for (const e of byPerson.values()) list.push({ name: e.name, position: [...e.positions].join(', ') || null, status: e.status })
     }
-
-    const context = ST_LABEL[plan.st] ?? (plan.title || 'Special Event')
-    const out: CalEvent[] = []
-    if (timesRes.ok) {
-      const j = await timesRes.json()
-      // deno-lint-ignore no-explicit-any
-      for (const t of (j.data ?? []) as any[]) {
-        const a = t.attributes
-        if (!a.starts_at) continue
-        const s = new Date(a.starts_at)
-        if (s < rangeStart || s > rangeEnd) continue
-        const name = a.name || (a.time_type === 'service' ? (plan.title || 'Service') : (plan.title || 'Plan Time'))
-        out.push({
-          id: `pco-${t.id}`, layer: 'pco', title: name,
-          start: a.starts_at, end: a.ends_at ?? null, allDay: false,
-          context, assignees,
-          sourceUrl: `https://services.planningcenteronline.com/plans/${plan.id}`,
-        })
-      }
-    }
-    return out
+    assigneesByPlan.set(plan.id, list)
   }))
-  return perPlan.flat()
+
+  const out: CalEvent[] = []
+  for (const { plan, times } of relevant) {
+    const assignees = assigneesByPlan.get(plan.id) ?? []
+    const context = ST_LABEL[plan.st] ?? (plan.title || 'Special Event')
+    // deno-lint-ignore no-explicit-any
+    for (const t of times as any[]) {
+      const a = t.attributes
+      const name = a.name || (a.time_type === 'service' ? (plan.title || 'Service') : (plan.title || 'Plan Time'))
+      out.push({
+        id: `pco-${t.id}`, layer: 'pco', title: name,
+        start: a.starts_at, end: a.ends_at ?? null, allDay: false,
+        context, assignees,
+        sourceUrl: `https://services.planningcenteronline.com/plans/${plan.id}`,
+      })
+    }
+  }
+  return out
+}
+
+// Cache the (large) iCal feeds server-side to avoid re-downloading on every
+// load and to stay under Google's rate limiting. 5-minute TTL, with a fetch
+// timeout so a slow/throttled feed never hangs the whole request.
+const icalCache = new Map<string, { text: string; at: number }>()
+async function fetchIcalCached(url: string): Promise<string> {
+  const cached = icalCache.get(url)
+  if (cached && Date.now() - cached.at < 5 * 60_000) return cached.text
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 6000)
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, headers: { 'Accept-Encoding': 'gzip, deflate, br' } })
+    if (!res.ok) return cached?.text ?? ''
+    const text = await res.text()
+    // Ignore throttle/redirect stubs (real feeds are large).
+    if (text.length < 5000 && !text.includes('BEGIN:VEVENT')) return cached?.text ?? ''
+    icalCache.set(url, { text, at: Date.now() })
+    return text
+  } catch { return cached?.text ?? '' }
+  finally { clearTimeout(timer) }
 }
 
 const CHURCH_TZ = 'America/Chicago'

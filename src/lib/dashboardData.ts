@@ -148,6 +148,24 @@ export async function postClipboardText(
   await pruneToMaxSlots()
 }
 
+export async function postClipboardFile(
+  file: File, postedByName: string, postedByAvatarUrl: string | null,
+): Promise<void> {
+  const path = `${crypto.randomUUID()}-${file.name}`
+  const up = await supabase.storage.from('clipboard-files').upload(path, file, { upsert: false })
+  if (up.error) throw up.error
+  const { data: pub } = supabase.storage.from('clipboard-files').getPublicUrl(path)
+  const expiresAt = new Date(Date.now() + EXPIRY_HOURS * 3600_000).toISOString()
+  const { error } = await supabase.from('clipboard_items').insert({
+    kind: 'file', label: file.name, body: null,
+    file_url: pub.publicUrl, file_name: file.name,
+    posted_by_name: postedByName, posted_by_avatar_url: postedByAvatarUrl,
+    expires_at: expiresAt,
+  })
+  if (error) throw error
+  await pruneToMaxSlots()
+}
+
 /** Keep only the newest MAX_SLOTS non-expired items (rolling shelf). */
 async function pruneToMaxSlots(): Promise<void> {
   const { data } = await supabase

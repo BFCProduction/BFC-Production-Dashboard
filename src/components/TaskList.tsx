@@ -25,13 +25,15 @@ function fmtDue(due: string | null): string {
   const base = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   return /[ T]\d{2}:\d{2}/.test(due) ? `${base}, ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : base
 }
+// Chronological: earliest due date first (so overdue is at the top), no-date
+// last; priority breaks ties on the same day.
 function sortTasks(list: MondayTask[]): MondayTask[] {
-  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-  const bucket = (t: MondayTask) => { const m = parseDue(t.dueDate); return m === null ? 2 : (m < todayStart.getTime() ? 0 : 1) }
   return [...list].sort((a, b) => {
-    const ba = bucket(a), bb = bucket(b); if (ba !== bb) return ba - bb
     const ma = parseDue(a.dueDate), mb = parseDue(b.dueDate)
-    if (ma !== null && mb !== null && ma !== mb) return mb - ma
+    if (ma === null && mb === null) return priorityRank(a.priority) - priorityRank(b.priority)
+    if (ma === null) return 1
+    if (mb === null) return -1
+    if (ma !== mb) return ma - mb
     return priorityRank(a.priority) - priorityRank(b.priority)
   })
 }
@@ -118,6 +120,7 @@ function PersonEditor({ assignees, people, onChange }: { assignees: MondayAssign
             <button key={p.id} onClick={() => toggle(p.id)} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50">
               <Avatar name={p.name} url={p.avatarUrl} size={20} />
               <span className="truncate">{p.name}</span>
+              {p.guest && <span className="text-[9px] uppercase tracking-wide bg-amber-100 text-amber-700 rounded px-1 py-0.5 shrink-0">guest</span>}
               {selected.has(p.id) && <Check size={13} className="ml-auto text-blue-600" />}
             </button>
           ))}

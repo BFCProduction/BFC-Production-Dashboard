@@ -117,7 +117,7 @@ Deno.serve(async (req) => {
         }
       }
     }
-    users(kind: non_guests, limit: 100) { id name photo_thumb_small }
+    users(limit: 300) { id name photo_thumb_small is_guest enabled }
   }`)
 
   const b = data?.data?.boards?.[0]
@@ -131,7 +131,10 @@ Deno.serve(async (req) => {
   for (const c of (b?.columns ?? []) as any[]) { maps[c.id] = colorMap(c.settings_str); options[c.id] = statusOptions(c.settings_str) }
 
   // deno-lint-ignore no-explicit-any
-  const people = (data?.data?.users ?? []).map((u: any) => ({ id: String(u.id), name: u.name, avatarUrl: u.photo_thumb_small ?? null }))
+  const people = (data?.data?.users ?? [])
+    .filter((u: any) => u.enabled !== false)
+    .map((u: any) => ({ id: String(u.id), name: u.name, avatarUrl: u.photo_thumb_small ?? null, guest: !!u.is_guest }))
+    .sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name))
   const peopleMap: Record<string, { name: string; avatarUrl: string | null }> = {}
   for (const p of people) peopleMap[p.id] = { name: p.name, avatarUrl: p.avatarUrl }
 

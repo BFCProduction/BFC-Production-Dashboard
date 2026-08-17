@@ -31,6 +31,7 @@ export interface MondayAssignee {
   id: string
   name: string
   avatarUrl: string | null
+  guest?: boolean
 }
 
 export interface MondayUpdate {

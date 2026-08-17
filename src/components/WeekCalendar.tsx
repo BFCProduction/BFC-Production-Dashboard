@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, AlertCircle, Users, ExternalLink, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, AlertCircle, Users, ExternalLink, X, CalendarDays, List } from 'lucide-react'
 import { useAuth } from '../context/authState'
 import { loadWeek, loadCrewCalendars, type WeekPayload, type CrewCalendar } from '../lib/dashboardData'
 import { getWeekRange, isoDate, sameDay, fmtTime } from '../lib/week'
@@ -91,8 +91,8 @@ function EventDetail({ event }: { event: CalendarEvent }) {
 // Mobile: bottom sheet.
 function DetailSheet({ event, onClose }: { event: CalendarEvent; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={onClose}>
-      <div className="w-full bg-white rounded-t-2xl p-4 pb-8 shadow-xl" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom))' }}>
+    <div className="fixed inset-0 z-50 flex items-end md:items-center md:justify-center bg-black/40" onClick={onClose}>
+      <div className="w-full md:max-w-md bg-white rounded-t-2xl md:rounded-2xl p-4 pb-8 md:pb-4 shadow-xl" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom))' }}>
         <div className="flex justify-between items-start">
           <div className="flex-1"><EventDetail event={event} /></div>
           <button onClick={onClose} className="p-1.5 -mt-1 -mr-1 rounded-lg hover:bg-gray-100 text-gray-400"><X size={18} /></button>
@@ -103,7 +103,7 @@ function DetailSheet({ event, onClose }: { event: CalendarEvent; onClose: () => 
 }
 
 // Desktop: hover/pin popover on an absolutely-positioned chip.
-function EventChip({ event, style }: { event: CalendarEvent; style?: React.CSSProperties }) {
+function EventChip({ event, style, compact = false }: { event: CalendarEvent; style?: React.CSSProperties; compact?: boolean }) {
   const ref = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [pinned, setPinned] = useState(false)
@@ -133,14 +133,15 @@ function EventChip({ event, style }: { event: CalendarEvent; style?: React.CSSPr
         onMouseLeave={() => { if (!pinned) setOpen(false) }}
         onClick={(e) => { e.stopPropagation(); place(); setPinned(p => !p); setOpen(true) }}
         style={style}
-        className={`text-left overflow-hidden rounded-md border px-1.5 py-0.5 block w-full ${LAYER_TONE[event.layer]}`}
+        className={`text-left overflow-hidden rounded-md border px-2 py-1 block w-full ${LAYER_TONE[event.layer]}`}
       >
-        <p className="truncate text-[10px] font-semibold leading-tight">{event.title}</p>
-        <p className="truncate font-mono text-[9px] opacity-70">
-          {event.allDay ? '' : fmtTime(event.start)}
-          {event.context ? `${event.allDay ? '' : ' · '}${event.context}` : ''}
-          {event.personName ? ` · ${event.personName}` : ''}
-        </p>
+        {!compact && !event.allDay && <p className="truncate text-[9px] font-semibold uppercase tracking-wide opacity-60 leading-none mb-1">{fmtTime(event.start)}{event.end ? `–${fmtTime(event.end)}` : ''}</p>}
+        <p className="truncate text-[11px] font-semibold leading-tight">{event.title}</p>
+        {!compact && (event.context || event.personName || event.location) && (
+          <p className="truncate text-[9px] opacity-65 mt-0.5">
+            {[event.context, event.personName, event.location].filter(Boolean).join(' · ')}
+          </p>
+        )}
       </button>
       {open && pos && (
         <div className="fixed z-50 w-64 rounded-xl bg-white border border-gray-200 shadow-xl p-3 text-left" style={{ left: pos.left, top: pos.top }}
@@ -149,6 +150,50 @@ function EventChip({ event, style }: { event: CalendarEvent; style?: React.CSSPr
         </div>
       )}
     </>
+  )
+}
+
+// Full-week list: generous, scan-friendly rows grouped by day.
+function WeekList({ days, events, onSelect }: { days: Date[]; events: CalendarEvent[]; onSelect: (e: CalendarEvent) => void }) {
+  return (
+    <div className="divide-y divide-gray-100">
+      {days.map(day => {
+        const dayEvents = events
+          .filter(e => sameDay(new Date(e.start), day))
+          .sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.localeCompare(b.start) || a.title.localeCompare(b.title))
+        const today = sameDay(day, new Date())
+        return (
+          <section key={isoDate(day)} className="grid md:grid-cols-[150px_1fr] gap-2 md:gap-5 px-4 py-4">
+            <div>
+              <div className={`text-xs font-semibold uppercase tracking-wide ${today ? 'text-blue-600' : 'text-gray-400'}`}>{day.toLocaleDateString('en-US', { weekday: 'long' })}</div>
+              <div className="text-sm font-semibold text-gray-800">{day.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}</div>
+            </div>
+            {dayEvents.length === 0 ? (
+              <div className="text-sm text-gray-400 py-2">Nothing scheduled.</div>
+            ) : (
+              <div className="space-y-2">
+                {dayEvents.map(e => (
+                  <button key={e.id} onClick={() => onSelect(e)} className="w-full text-left flex items-stretch gap-3 rounded-xl border border-gray-200 bg-white p-3 hover:bg-gray-50 hover:border-gray-300 transition-colors">
+                    <div className="w-24 shrink-0 text-right tabular-nums">
+                      <div className="text-xs font-semibold text-gray-800">{e.allDay ? 'All day' : fmtTime(e.start)}</div>
+                      {!e.allDay && e.end && <div className="text-[11px] text-gray-400">to {fmtTime(e.end)}</div>}
+                    </div>
+                    <span className={`w-1 rounded-full ${LAYER_BAR[e.layer]}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-gray-900">{e.title}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">
+                        {[e.context, e.personName, e.location].filter(Boolean).join(' · ') || (e.layer === 'monday' ? 'Task due' : 'Calendar event')}
+                        {e.assignees?.length ? ` · ${e.assignees.length} crew` : ''}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        )
+      })}
+    </div>
   )
 }
 
@@ -224,6 +269,7 @@ export function WeekCalendar() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [reloadNonce, setReloadNonce] = useState(0)
   const [sheetEvent, setSheetEvent] = useState<CalendarEvent | null>(null)
+  const [view, setView] = useState<'week' | 'list'>(() => localStorage.getItem('calendar_view') === 'list' ? 'list' : 'week')
   const [hidden, setHidden] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem('cal_hidden') ?? '[]')) } catch { return new Set() }
   })
@@ -237,6 +283,11 @@ export function WeekCalendar() {
       localStorage.setItem('cal_hidden', JSON.stringify([...next]))
       return next
     })
+  }
+
+  function changeView(next: 'week' | 'list') {
+    setView(next)
+    localStorage.setItem('calendar_view', next)
   }
 
   useEffect(() => { loadCrewCalendars().then(setCrew).catch(() => {}) }, [reloadNonce])
@@ -286,6 +337,10 @@ export function WeekCalendar() {
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <div className="flex items-center rounded-lg bg-gray-100 p-0.5 mr-1" aria-label="Calendar view">
+            <button onClick={() => changeView('week')} title="Week view" aria-pressed={view === 'week'} className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${view === 'week' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><CalendarDays size={14} /><span className="hidden lg:inline">Week</span></button>
+            <button onClick={() => changeView('list')} title="List view" aria-pressed={view === 'list'} className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${view === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><List size={14} /><span className="hidden lg:inline">List</span></button>
+          </div>
           <button onClick={() => setSettingsOpen(true)} title="Crew calendars" className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg hover:bg-gray-100 text-gray-600"><Users size={15} /><span className="hidden sm:inline">Calendars</span></button>
           <span className="w-px h-4 bg-gray-200 mx-0.5" />
           <button onClick={() => setOffset(o => o - 1)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600"><ChevronLeft size={18} /></button>
@@ -323,11 +378,15 @@ export function WeekCalendar() {
       {loading && <p className="px-4 py-6 text-sm text-gray-400">Loading week…</p>}
       {error && <p className="px-4 py-6 text-sm text-gray-400">Calendar isn't connected yet ({error}).</p>}
 
-      {!loading && !error && isMobile && (
+      {!loading && !error && view === 'list' && (
+        <WeekList days={days} events={events} onSelect={setSheetEvent} />
+      )}
+
+      {!loading && !error && view === 'week' && isMobile && (
         <MobileAgenda days={days} events={events} onSelect={setSheetEvent} />
       )}
 
-      {!loading && !error && !isMobile && (
+      {!loading && !error && view === 'week' && !isMobile && (
         <div className="w-full">
           {/* Day headers */}
           <div className="flex border-b border-gray-100 bg-gray-50/60">
@@ -380,7 +439,7 @@ export function WeekCalendar() {
                       const widthPct = 100 / lanes
                       return (
                         <div key={e.id} className="absolute" style={{ top: top + 1, height: h - 2, left: `calc(${lane * widthPct}% + 1px)`, width: `calc(${widthPct}% - 2px)` }}>
-                          <EventChip event={e} style={{ height: '100%' }} />
+                          <EventChip event={e} compact={h < 54 || lanes > 2} style={{ height: '100%' }} />
                         </div>
                       )
                     })}

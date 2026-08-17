@@ -34,6 +34,23 @@ function hourLabel(minute: number) {
   return `${h12}${hour >= 12 ? 'p' : 'a'}`
 }
 
+function sameLabel(a?: string, b?: string): boolean {
+  if (!a || !b) return false
+  const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  return normalize(a) === normalize(b)
+}
+
+/** In the grid, identify a PCO time by the plan/service it belongs to first. */
+function gridEventLabel(event: CalendarEvent): string {
+  if (event.layer !== 'pco' || !event.context || sameLabel(event.context, event.title)) return event.title
+  return `${event.context} · ${event.title}`
+}
+
+function gridEventMeta(event: CalendarEvent): string {
+  if (event.layer === 'pco') return event.location ?? ''
+  return [event.personName, event.location].filter(Boolean).join(' · ')
+}
+
 interface Placement { event: CalendarEvent; lane: number; lanes: number }
 function packDay(events: CalendarEvent[]): Placement[] {
   const sorted = [...events].sort((a, b) => a.start.localeCompare(b.start) || (a.end ?? '').localeCompare(b.end ?? ''))
@@ -135,11 +152,10 @@ function EventChip({ event, style, compact = false }: { event: CalendarEvent; st
         style={style}
         className={`text-left overflow-hidden rounded-md border px-2 py-1 block w-full ${LAYER_TONE[event.layer]}`}
       >
-        {!compact && !event.allDay && <p className="truncate text-[9px] font-semibold uppercase tracking-wide opacity-60 leading-none mb-1">{fmtTime(event.start)}{event.end ? `–${fmtTime(event.end)}` : ''}</p>}
-        <p className="truncate text-[11px] font-semibold leading-tight">{event.title}</p>
-        {!compact && (event.context || event.personName || event.location) && (
-          <p className="truncate text-[9px] opacity-65 mt-0.5">
-            {[event.context, event.personName, event.location].filter(Boolean).join(' · ')}
+        <p className={`${compact ? 'truncate' : 'line-clamp-2'} text-[11px] font-semibold leading-tight`}>{gridEventLabel(event)}</p>
+        {!compact && gridEventMeta(event) && (
+          <p className="truncate text-[9px] opacity-65 mt-1">
+            {gridEventMeta(event)}
           </p>
         )}
       </button>
@@ -421,8 +437,8 @@ export function WeekCalendar() {
           <div className="relative" style={{ height }}>
             {hourMarks.map(minute => (
               <div key={minute} className="absolute left-0 right-0" style={{ top: (minute - windowStart) * PX_PER_MIN }}>
-                <div className="absolute left-0 text-[9px] font-mono text-gray-300" style={{ top: -5, width: GUTTER - 6, textAlign: 'right' }}>{hourLabel(minute)}</div>
-                <div className="border-t border-gray-100" style={{ marginLeft: GUTTER }} />
+                <div className="absolute left-0 text-[10px] font-mono font-medium text-gray-500" style={{ top: -6, width: GUTTER - 6, textAlign: 'right' }}>{hourLabel(minute)}</div>
+                <div className="border-t border-gray-200" style={{ marginLeft: GUTTER }} />
               </div>
             ))}
             <div className="absolute top-0 bottom-0 flex" style={{ left: GUTTER, right: 0 }}>
@@ -439,7 +455,7 @@ export function WeekCalendar() {
                       const widthPct = 100 / lanes
                       return (
                         <div key={e.id} className="absolute" style={{ top: top + 1, height: h - 2, left: `calc(${lane * widthPct}% + 1px)`, width: `calc(${widthPct}% - 2px)` }}>
-                          <EventChip event={e} compact={h < 54 || lanes > 2} style={{ height: '100%' }} />
+                          <EventChip event={e} compact={h < 38 || lanes > 2} style={{ height: '100%' }} />
                         </div>
                       )
                     })}

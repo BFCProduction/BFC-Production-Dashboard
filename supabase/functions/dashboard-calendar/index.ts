@@ -342,18 +342,23 @@ async function fetchMondayDueTasks(start: Date, end: Date): Promise<CalEvent[]> 
   const out: CalEvent[] = []
   for (const it of items) {
     const due = it.column_values.find((c: { type: string }) => c.type === 'date')?.text
-    const d = parseDue(due)
-    if (!d) continue
-    if (d < start || d > end) continue
-    out.push({ id: `monday-${it.id}`, layer: 'monday', title: it.name, start: d.toISOString(), end: null, allDay: true, sourceUrl: `https://monday.com/boards/${board}/pulses/${it.id}` })
+    const parsed = parseDue(due)
+    if (!parsed) continue
+    if (parsed.date < start || parsed.date > end) continue
+    out.push({
+      id: `monday-${it.id}`, layer: 'monday', title: it.name,
+      start: parsed.date.toISOString(), end: null, allDay: !parsed.hasTime,
+      sourceUrl: `https://monday.com/boards/${board}/pulses/${it.id}`,
+    })
   }
   return out
 }
 
-function parseDue(due: string | null | undefined): Date | null {
+function parseDue(due: string | null | undefined): { date: Date; hasTime: boolean } | null {
   if (!due) return null
   const m = due.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/)
   if (!m) return null
   const [, y, mo, d, h, mi] = m
-  return new Date(+y, +mo - 1, +d, h ? +h : 9, mi ? +mi : 0)
+  const hasTime = h !== undefined && mi !== undefined
+  return { date: new Date(+y, +mo - 1, +d, hasTime ? +h : 9, hasTime ? +mi : 0), hasTime }
 }

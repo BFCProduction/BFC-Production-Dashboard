@@ -28,6 +28,10 @@ function minsFromMidnight(iso: string): number {
   const d = new Date(iso)
   return d.getHours() * 60 + d.getMinutes()
 }
+function eventEndMinute(event: CalendarEvent): number {
+  const start = minsFromMidnight(event.start)
+  return event.end ? Math.max(minsFromMidnight(event.end), start + 20) : start + 30
+}
 function hourLabel(minute: number) {
   const hour = Math.floor(minute / 60)
   const h12 = hour % 12 || 12
@@ -58,7 +62,7 @@ function packDay(events: CalendarEvent[]): Placement[] {
   let active: { lane: number; endM: number }[] = []
   for (const e of sorted) {
     const startM = minsFromMidnight(e.start)
-    const endM = Math.max(minsFromMidnight(e.end as string), startM + 20)
+    const endM = eventEndMinute(e)
     active = active.filter(a => a.endM > startM)
     const used = new Set(active.map(a => a.lane))
     let lane = 0; while (used.has(lane)) lane++
@@ -219,8 +223,8 @@ function MobileAgenda({ days, events, onSelect }: { days: Date[]; events: Calend
   const [sel, setSel] = useState(todayIdx >= 0 ? todayIdx : 0)
   const day = days[sel]
   const dayEvents = events.filter(e => sameDay(new Date(e.start), day))
-  const allDay = dayEvents.filter(e => e.allDay || !e.end).sort((a, b) => a.title.localeCompare(b.title))
-  const timed = dayEvents.filter(e => !e.allDay && e.end).sort((a, b) => a.start.localeCompare(b.start))
+  const allDay = dayEvents.filter(e => e.allDay).sort((a, b) => a.title.localeCompare(b.title))
+  const timed = dayEvents.filter(e => !e.allDay).sort((a, b) => a.start.localeCompare(b.start))
 
   return (
     <div>
@@ -328,11 +332,11 @@ export function WeekCalendar() {
   const { days } = getWeekRange(new Date(), offset)
   // Per-viewer visibility: hide events from calendars the user toggled off.
   const events = (payload?.events ?? []).filter(e => !(e.calendarId && hidden.has(e.calendarId)))
-  const timed = events.filter(e => !e.allDay && e.end)
-  const allDay = events.filter(e => e.allDay || !e.end)
+  const timed = events.filter(e => !e.allDay)
+  const allDay = events.filter(e => e.allDay)
 
   const starts = timed.map(e => minsFromMidnight(e.start))
-  const ends = timed.map(e => minsFromMidnight(e.end as string))
+  const ends = timed.map(eventEndMinute)
   const windowStart = timed.length ? Math.floor(Math.min(...starts) / 60) * 60 : 8 * 60
   const windowEnd = timed.length ? Math.ceil(Math.max(...ends) / 60) * 60 : 22 * 60
   const height = (windowEnd - windowStart) * PX_PER_MIN
@@ -449,7 +453,7 @@ export function WeekCalendar() {
                   <div key={isoDate(d)} className={`relative border-l border-gray-100 ${today ? 'bg-blue-50/40' : ''}`} style={{ flex: `1 1 ${MIN_COL}px` }}>
                     {placements.map(({ event: e, lane, lanes }) => {
                       const s = minsFromMidnight(e.start)
-                      const en = minsFromMidnight(e.end as string)
+                      const en = eventEndMinute(e)
                       const top = (s - windowStart) * PX_PER_MIN
                       const h = Math.max((en - s) * PX_PER_MIN, MIN_BLOCK_H)
                       const widthPct = 100 / lanes

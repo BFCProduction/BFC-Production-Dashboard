@@ -46,6 +46,11 @@ export interface StatusCell {
   color: string // hex, from monday column settings
 }
 
+export interface StatusOption { index: number; label: string; color: string }
+export interface TaskOptions { priority: StatusOption[]; status: StatusOption[]; category: StatusOption[] }
+export interface TasksPayload { tasks: MondayTask[]; people: MondayAssignee[]; options: TaskOptions }
+export type TaskField = 'priority' | 'status' | 'category' | 'person' | 'due'
+
 export interface MondayTask {
   id: string
   name: string

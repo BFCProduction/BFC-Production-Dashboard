@@ -1,6 +1,6 @@
 import { supabase, callFunction } from './supabase'
 import type {
-  CalendarEvent, MondayTask, MondayUpdate, ClipboardItem, PersonHours,
+  CalendarEvent, MondayUpdate, ClipboardItem, PersonHours, TasksPayload, TaskField,
 } from '../types'
 import { getWeekRange, isoDate } from './week'
 
@@ -26,10 +26,16 @@ export async function loadWeek(offsetWeeks: number, sessionToken: string | null)
   }, sessionToken)
 }
 
-/** monday tasks in Inbox + Next Actions (updates loaded lazily on expand). */
-export async function loadTasks(sessionToken: string | null): Promise<MondayTask[]> {
-  const { tasks } = await callFunction<{ tasks: MondayTask[] }>('dashboard-tasks', {}, sessionToken)
-  return tasks
+/** monday tasks (Inbox + Next Actions) + dropdown options + assignable people. */
+export async function loadTasks(sessionToken: string | null): Promise<TasksPayload> {
+  return callFunction<TasksPayload>('dashboard-tasks', {}, sessionToken)
+}
+
+/** Write a column value back to monday. value: label string | id array | date string | null. */
+export async function updateTaskField(
+  taskId: string, field: TaskField, value: unknown, sessionToken: string | null,
+): Promise<void> {
+  await callFunction('dashboard-tasks', { action: 'update', taskId, field, value }, sessionToken)
 }
 
 /** Lazy-load a single task's monday updates when the card is expanded. */
